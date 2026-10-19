@@ -9,11 +9,8 @@ BATCH, SAMPLE = 40, 15
 def log(*a): print(time.strftime("%H:%M:%S"), *a, flush=True)
 def ask(msg, default):
     return input(f"{msg} [{default}]: ").strip().strip('"') or default
-def lang_or_none(msg, default):
-    r = (input(f"{msg} [{default}]: ").strip() or default).upper()
-    return None if r in ("-", "N", "NAO", "NÃO") else r
 
-# ---- perguntas ----
+# ---- perguntas (idioma de origem agora vem DEPOIS da detecção) ----
 SRC = os.path.abspath(ask("Arquivo de entrada", "italian.apkg"))
 if not os.path.exists(SRC):
     raise SystemExit(f"Arquivo não encontrado: {SRC}")
@@ -22,7 +19,6 @@ OUT = os.path.abspath(ask("Arquivo de saída", f"{base}_out.apkg"))
 if not OUT.lower().endswith(".apkg"):
     OUT += ".apkg"
 
-SRC_LANG = ask("Idioma de origem (auto = detectar)", "auto").upper()
 SIDE = ask("Qual lado traduzir? (f = frente, v = verso, a = ambos)", "v").lower()
 T_BACK = T_FRONT = None
 TARGET = ask("Idioma de saída", "PT-BR").upper()
@@ -37,11 +33,6 @@ tcodes = {l.code for l in tr.get_target_languages()}
 for t in (T_FRONT, T_BACK):
     if t and t not in tcodes:
         raise SystemExit(f"Idioma de saída inválido: {t}. Opções: {sorted(tcodes)}")
-if SRC_LANG != "AUTO":
-    scodes = {l.code for l in tr.get_source_languages()}
-    if SRC_LANG.split("-")[0] not in scodes:
-        raise SystemExit(f"Idioma de origem inválido. Opções: {sorted(scodes)} ou auto")
-    SRC_LANG = SRC_LANG.split("-")[0]
 
 # ---- proteção de tags ----
 PROT = re.compile(r"\[sound:[^\]]+\]|\{\{c\d+::|\}\}")
@@ -85,19 +76,49 @@ for n in notes:
         if f in allowed[n.mid] and len(plain(v)) >= 3:
             vals[(n.mid, f)].append(v)
 
-# ---- detecta o idioma de cada campo ----
-chosen = {}   # (mid, campo) -> (idioma de origem, idioma de saída)
+# ---- 1) detecta o idioma de cada campo ----
+detected = {}   # (mid, campo) -> (idioma detectado, proporção, exemplos)
 for (mid, f), vs in vals.items():
     target = allowed[mid][f]
-    tbase = target.split("-")[0]
     sample = random.sample(vs, min(SAMPLE, len(vs)))
     res = tr.translate_text([plain(s) for s in sample], target_lang=target)
     lang, cnt = collections.Counter(r.detected_source_lang for r in res).most_common(1)[0]
-    ratio = cnt / len(res)
-    ok = ratio >= 0.6 and lang != tbase and (SRC_LANG == "AUTO" or lang == SRC_LANG)
-    log(f"  {names[mid]} / {f}: {lang} ({ratio:.0%}) -> {'TRADUZ p/ ' + target if ok else 'mantém'}")
+    detected[(mid, f)] = (lang, cnt / len(res), [plain(s)[:40] for s in sample[:3]])
+
+# ---- 2) mostra o resultado ANTES de perguntar a origem ----
+print("\n=== Idiomas detectados ===")
+auto_chosen = {}   # decisão automática: (mid, campo) -> (origem, saída)
+for (mid, f), (lang, ratio, ex) in detected.items():
+    target = allowed[mid][f]
+    ok = ratio >= 0.6 and lang != target.split("-")[0]
     if ok:
-        chosen[(mid, f)] = (lang, target)
+        auto_chosen[(mid, f)] = (lang, target)
+    acao = f"traduzir p/ {target}" if ok else "manter"
+    print(f"  {names[mid]} / {f}: {lang} ({ratio:.0%}) -> {acao}")
+    print(f"      ex.: {' | '.join(ex)}")
+
+# ---- 3) confirma ou força o idioma de origem ----
+print("\nEnter = aceitar a detecção acima")
+print("Código (ex.: IT) = forçar esse idioma de origem em TODOS os campos listados")
+print("n = cancelar")
+choice = input("Sua escolha: ").strip().strip('"').upper()
+
+if choice in ("N", "NAO", "NÃO"):
+    col.close()
+    raise SystemExit("Cancelado.")
+elif choice in ("", "AUTO"):
+    chosen = auto_chosen
+else:
+    forced = choice.split("-")[0]
+    scodes = {l.code for l in tr.get_source_languages()}
+    if forced not in scodes:
+        raise SystemExit(f"Idioma de origem inválido. Opções: {sorted(scodes)}")
+    chosen = {k: (forced, allowed[k[0]][k[1]]) for k in detected}
+    log("origem forçada:", forced)
+
+if not chosen:
+    col.close()
+    raise SystemExit("Nenhum campo para traduzir.")
 
 # ---- traduz (cache por idioma de saída e de origem) ----
 cache_file = "cache.json"

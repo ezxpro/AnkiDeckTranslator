@@ -26,13 +26,33 @@ def load_key():
     return key
 
 KEY = load_key()
-BATCH, SAMPLE = 40, 15
+BATCH, SAMPLE, MIN_RATIO = 40, 10, 0.6
 
 def log(*a): print(time.strftime("%H:%M:%S"), *a, flush=True)
 def ask(msg, default):
     return input(f"{msg} [{default}]: ").strip().strip('"') or default
 
-# ---- perguntas (idioma de origem agora vem DEPOIS da detecção) ----
+def show_langs(title, langs):
+    items = sorted(langs, key=lambda l: l.name)
+    half = (len(items) + 1) // 2
+    print(f"\n{title}")
+    for i in range(half):
+        left = f"  {items[i].code:<8}{items[i].name}"
+        right = ""
+        if i + half < len(items):
+            r = items[i + half]
+            right = f"{r.code:<8}{r.name}"
+        print(f"{left:<40}{right}")
+    print()
+
+# ---- DeepL ----
+tr = deepl.Translator(KEY)
+log("uso atual DeepL:", tr.get_usage().character)
+tlangs = tr.get_target_languages()
+tcodes = {l.code for l in tlangs}
+src_names = {l.code: l.name for l in tr.get_source_languages()}
+
+# ---- perguntas ----
 SRC = os.path.abspath(ask("Arquivo de entrada", "italian.apkg"))
 if not os.path.exists(SRC):
     raise SystemExit(f"Arquivo não encontrado: {SRC}")
@@ -41,20 +61,14 @@ OUT = os.path.abspath(ask("Arquivo de saída", f"{base}_out.apkg"))
 if not OUT.lower().endswith(".apkg"):
     OUT += ".apkg"
 
-SIDE = ask("Qual lado traduzir? (f = frente, v = verso, a = ambos)", "v").lower()
-T_BACK = T_FRONT = None
-TARGET = ask("Idioma de saída", "PT-BR").upper()
-if SIDE in ("f", "a"): T_FRONT = TARGET
-if SIDE in ("v", "a"): T_BACK = TARGET
-if not (T_FRONT or T_BACK):
-    raise SystemExit("Opção inválida: use f, v ou a.")
-
-tr = deepl.Translator(KEY)
-log("uso atual DeepL:", tr.get_usage().character)
-tcodes = {l.code for l in tr.get_target_languages()}
-for t in (T_FRONT, T_BACK):
-    if t and t not in tcodes:
-        raise SystemExit(f"Idioma de saída inválido: {t}. Opções: {sorted(tcodes)}")
+show_langs("Idiomas de saída disponíveis (código  nome):", tlangs)
+while True:
+    TARGET = ask("Idioma de saída (Enter = português do Brasil, ou digite um código da lista acima)",
+                 "PT-BR").upper()
+    if TARGET in tcodes:
+        break
+    print(f"  '{TARGET}' não é um código válido. Use um dos códigos da lista acima.")
+TBASE = TARGET.split("-")[0]
 
 # ---- proteção de tags ----
 PROT = re.compile(r"\[sound:[^\]]+\]|\{\{c\d+::|\}\}")
@@ -63,18 +77,7 @@ def mask(t):   return PROT.sub(lambda m: f'<span translate="no">{m.group(0)}</sp
 def unmask(t): return WRAP.sub(r"\1", t)
 def plain(s):  return re.sub(r"\[sound:[^\]]+\]|<[^>]+>|&\w+;|\{\{c\d+::|\}\}", "", s).strip()
 
-# ---- frente / verso, a partir dos templates do tipo de nota ----
-def refs(fmt, name):
-    return re.search(r"\{\{[#^/]?(?:[^{}:]+:)*" + re.escape(name) + r"\}\}", fmt) is not None
-
-def sides(model):
-    front, back = set(), set()
-    for t in model["tmpls"]:
-        for name in (f["name"] for f in model["flds"]):
-            if refs(t["qfmt"], name): front.add(name)
-            elif refs(t["afmt"], name): back.add(name)
-    return front, back - front
-
+# ---- importa o baralho ----
 log("importando", SRC)
 col = Collection(os.path.join(tempfile.mkdtemp(), "collection.anki2"))
 col.import_anki_package(ImportAnkiPackageRequest(
@@ -82,65 +85,76 @@ col.import_anki_package(ImportAnkiPackageRequest(
 notes = [col.get_note(n) for n in col.find_notes("")]
 log("notas:", len(notes))
 
-allowed, names = {}, {}      # mid -> {campo: idioma de saída}
+names = {}
+vals = collections.defaultdict(list)   # (mid, campo) -> valores com texto
 for n in notes:
-    if n.mid not in allowed:
-        m = n.note_type()
-        fr, bk = sides(m)
-        allowed[n.mid] = {**({f: T_FRONT for f in fr} if T_FRONT else {}),
-                          **({f: T_BACK for f in bk} if T_BACK else {})}
-        names[n.mid] = m["name"]
-        log(f"  {m['name']}: frente={sorted(fr)} verso={sorted(bk)}")
-
-vals = collections.defaultdict(list)
-for n in notes:
+    if n.mid not in names:
+        names[n.mid] = n.note_type()["name"]
     for f, v in n.items():
-        if f in allowed[n.mid] and len(plain(v)) >= 3:
+        if len(plain(v)) >= 3:
             vals[(n.mid, f)].append(v)
 
 # ---- 1) detecta o idioma de cada campo ----
-detected = {}   # (mid, campo) -> (idioma detectado, proporção, exemplos)
+log(f"detectando o idioma de {len(vals)} campos (amostra de até {SAMPLE} textos cada)...")
+detected = {}   # (mid, campo) -> (idioma, proporção, exemplo)
 for (mid, f), vs in vals.items():
-    target = allowed[mid][f]
     sample = random.sample(vs, min(SAMPLE, len(vs)))
-    res = tr.translate_text([plain(s) for s in sample], target_lang=target)
+    res = tr.translate_text([plain(s) for s in sample], target_lang=TARGET)
     lang, cnt = collections.Counter(r.detected_source_lang for r in res).most_common(1)[0]
-    detected[(mid, f)] = (lang, cnt / len(res), [plain(s)[:40] for s in sample[:3]])
+    ex = re.sub(r"\s+", " ", plain(sample[0]))[:45]
+    detected[(mid, f)] = (lang, cnt / len(res), ex)
 
-# ---- 2) mostra o resultado ANTES de perguntar a origem ----
-print("\n=== Idiomas detectados ===")
-auto_chosen = {}   # decisão automática: (mid, campo) -> (origem, saída)
-for (mid, f), (lang, ratio, ex) in detected.items():
-    target = allowed[mid][f]
-    ok = ratio >= 0.6 and lang != target.split("-")[0]
-    if ok:
-        auto_chosen[(mid, f)] = (lang, target)
-    acao = f"traduzir p/ {target}" if ok else "manter"
-    print(f"  {names[mid]} / {f}: {lang} ({ratio:.0%}) -> {acao}")
-    print(f"      ex.: {' | '.join(ex)}")
+# ---- 2) mostra tudo ----
+print("\n=== Idioma detectado em cada campo ===")
+cur = None
+for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0][0]):
+    if mid != cur:
+        print(f"\n{names[mid]}")
+        cur = mid
+    label = lang if ratio >= MIN_RATIO else f"{lang}? (incerto)"
+    print(f"  {f}: {label} ({ratio:.0%})   ex.: {ex}")
 
-# ---- 3) confirma ou força o idioma de origem ----
-print("\nEnter = aceitar a detecção acima")
-print("Código (ex.: IT) = forçar esse idioma de origem em TODOS os campos listados")
-print("n = cancelar")
-choice = input("Sua escolha: ").strip().strip('"').upper()
-
-if choice in ("N", "NAO", "NÃO"):
+counts = collections.Counter(
+    lang for (lang, ratio, _) in detected.values() if ratio >= MIN_RATIO and lang != TBASE)
+ja_no_alvo = sum(1 for (lang, ratio, _) in detected.values()
+                 if ratio >= MIN_RATIO and lang == TBASE)
+options = counts.most_common()
+if not options:
     col.close()
-    raise SystemExit("Cancelado.")
-elif choice in ("", "AUTO"):
-    chosen = auto_chosen
-else:
-    forced = choice.split("-")[0]
-    scodes = {l.code for l in tr.get_source_languages()}
-    if forced not in scodes:
-        raise SystemExit(f"Idioma de origem inválido. Opções: {sorted(scodes)}")
-    chosen = {k: (forced, allowed[k[0]][k[1]]) for k in detected}
-    log("origem forçada:", forced)
+    raise SystemExit("\nNenhum campo em outro idioma para traduzir.")
 
-if not chosen:
-    col.close()
-    raise SystemExit("Nenhum campo para traduzir.")
+print(f"\n=== Idiomas que podem ser traduzidos para {TARGET} ===")
+for i, (code, c) in enumerate(options, 1):
+    print(f"  {i}) {code} - {src_names.get(code, code)} ({c} campos)")
+if ja_no_alvo:
+    print(f"  ({ja_no_alvo} campos já estão em {TBASE} e serão mantidos; campos 'incertos' também)")
+
+# ---- 3) escolhe qual(is) idioma(s) traduzir ----
+valid = dict(options)
+default = "1" if len(options) == 1 else ""
+while True:
+    prompt = "\nTraduzir qual idioma? número ou código (vários separados por vírgula, n = cancelar)"
+    raw = input(f"{prompt}{f' [{default}]' if default else ''}: ").strip().strip('"').upper() or default
+    if raw in ("N", "NAO", "NÃO"):
+        col.close()
+        raise SystemExit("Cancelado.")
+    picked, bad = set(), []
+    for tok in re.split(r"[,\s;]+", raw):
+        if not tok:
+            continue
+        if tok.isdigit() and 1 <= int(tok) <= len(options):
+            picked.add(options[int(tok) - 1][0])
+        elif tok in valid:
+            picked.add(tok)
+        else:
+            bad.append(tok)
+    if picked and not bad:
+        break
+    print(f"  Opção inválida: {', '.join(bad) or raw}. Escolha entre os números/códigos listados.")
+
+chosen = {k: (lang, TARGET) for k, (lang, ratio, _) in detected.items()
+          if lang in picked and ratio >= MIN_RATIO}
+log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
 
 # ---- traduz (cache por idioma de saída e de origem) ----
 cache_file = "cache.json"

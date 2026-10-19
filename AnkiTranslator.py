@@ -1,9 +1,31 @@
 # pip install anki deepl
 import json, os, re, time, random, tempfile, collections, deepl
+from pathlib import Path
 from anki.collection import (Collection, ImportAnkiPackageRequest,
     ImportAnkiPackageOptions, ExportAnkiPackageOptions)
 
-KEY = (os.environ.get("DEEPL_KEY") or "COLE-A-CHAVE-AQUI:fx").strip().strip('"')
+def load_key():
+    """Procura DEEPL_KEY na variável de ambiente; se não achar, lê o arquivo .env
+    que fica na mesma pasta do script (linha no formato DEEPL_KEY=sua-chave:fx)."""
+    key = os.environ.get("DEEPL_KEY", "").strip()
+    if not key:
+        env_file = Path(__file__).resolve().parent / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, value = line.split("=", 1)
+                if name.replace("export", "").strip() == "DEEPL_KEY":
+                    key = value.strip().strip('"').strip("'")
+                    break
+    if not key:
+        raise SystemExit("Chave do DeepL não encontrada. Defina a variável de ambiente "
+                         "DEEPL_KEY ou crie um arquivo .env ao lado do script com:\n"
+                         "DEEPL_KEY=sua-chave-aqui:fx")
+    return key
+
+KEY = load_key()
 BATCH, SAMPLE = 40, 15
 
 def log(*a): print(time.strftime("%H:%M:%S"), *a, flush=True)

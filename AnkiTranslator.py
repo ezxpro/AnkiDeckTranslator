@@ -329,8 +329,8 @@ def pick_scope(decks):
     paths = sorted({tuple(n.split(SEP)) for _, n in decks},
                    key=lambda p: tuple(s.lower() for s in p))
     scope = choose("Quais baralhos traduzir?",
-                   {"1": "Só os baralhos principais (subbaralhos mantêm o nome)",
-                    "2": "Todos os baralhos e subbaralhos",
+                   {"1": "Só os baralhos principais (sub-baralhos mantêm o nome)",
+                    "2": "Todos os baralhos e sub-baralhos",
                     "3": "Escolher por número"}, "2")
     if scope == "1":
         return {p[:1] for p in paths}

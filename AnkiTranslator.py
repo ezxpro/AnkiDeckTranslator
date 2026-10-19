@@ -237,6 +237,7 @@ for (L, T), texts in todo.items():
         save_cache()
         log(f"  [{L}->{T}] {min(i + BATCH, len(texts))}/{len(texts)}")
 
+
 # ---- aplica e exporta ----
 for n in notes:
     mudou = False
@@ -247,7 +248,188 @@ for n in notes:
             if new != v:
                 n[f] = new; mudou = True
     if mudou: col.update_note(n)
+# ---- nomes dos baralhos (roda depois de tudo, antes de exportar) ----
+DECK_CACHE_FILE = Path(__file__).resolve().parent / "deck_cache.json"  # separado do cache.json
+SEP = "::"
 
+def yes(msg, default="n"):
+    return ask(f"{msg} (s/n)", default).lower() in ("s", "sim", "y", "yes")
+
+def choose(title, opts, default):
+    print(f"\n{title}")
+    for k, v in opts.items():
+        print(f"  {k}) {v}")
+    while True:
+        r = ask("Escolha", default)
+        if r in opts:
+            return r
+        print("  Opção inválida.")
+
+def load_deck_cache():
+    try:
+        data = json.loads(DECK_CACHE_FILE.read_text(encoding="utf-8"))
+        if data.get("version") == 1 and isinstance(data.get("names"), dict):
+            return data
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, AttributeError):
+        bak = DECK_CACHE_FILE.with_name(DECK_CACHE_FILE.name + ".bak")
+        DECK_CACHE_FILE.replace(bak)
+        log(f"deck_cache.json estava ilegível; guardei uma cópia em {bak.name}")
+    return {"version": 1, "names": {}}
+
+def save_deck_cache(data):
+    tmp = DECK_CACHE_FILE.with_name(DECK_CACHE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(DECK_CACHE_FILE)
+
+def clean_seg(s, fallback):
+    s = s.replace(SEP, ":").strip()
+    return s or fallback
+
+def auto_names(segments, src_lang, dcache):
+    """Traduz segmentos soltos (nunca o caminho completo). Só a saída bruta do DeepL
+    vai para o cache; nomes digitados à mão nunca são gravados."""
+    bucket = (dcache["names"].setdefault(TARGET, {})
+                             .setdefault(src_lang or "auto", {}))
+    pending = sorted(s for s in segments if s not in bucket)
+    log(f"nomes de baralhos: {len(pending)} a traduzir "
+        f"({len(segments) - len(pending)} já no cache)")
+    for i in range(0, len(pending), BATCH):
+        chunk = pending[i:i + BATCH]
+        for _ in range(3):
+            try:
+                res = tr.translate_text(chunk, source_lang=src_lang, target_lang=TARGET)
+                break
+            except deepl.ConnectionException:
+                time.sleep(3)
+        else:
+            log("DeepL fora do ar; nomes restantes ficam como estão")
+            break
+        for s, r in zip(chunk, res):
+            already = r.detected_source_lang == TBASE        # já está no idioma de saída
+            bucket[s] = s if already else clean_seg(r.text, s)
+        save_deck_cache(dcache)
+    return {s: bucket.get(s, s) for s in segments}
+
+def parse_numbers(raw, n):
+    out = set()
+    for tok in re.split(r"[,\s;]+", raw):
+        if not tok:
+            continue
+        m = re.fullmatch(r"(\d+)-(\d+)", tok)
+        rng = range(int(m[1]), int(m[2]) + 1) if m else ([int(tok)] if tok.isdigit() else None)
+        if rng is None or any(not 1 <= k <= n for k in rng):
+            return None
+        out.update(rng)
+    return out or None
+
+def pick_scope(decks):
+    """Devolve o conjunto de prefixos (tuplas de segmentos) cujo nome será traduzido."""
+    paths = sorted({tuple(n.split(SEP)) for _, n in decks},
+                   key=lambda p: tuple(s.lower() for s in p))
+    scope = choose("Quais baralhos traduzir?",
+                   {"1": "Só os baralhos principais (subbaralhos mantêm o nome)",
+                    "2": "Todos os baralhos e subbaralhos",
+                    "3": "Escolher por número"}, "2")
+    if scope == "1":
+        return {p[:1] for p in paths}
+    if scope == "2":
+        return {p[:i + 1] for p in paths for i in range(len(p))}
+    print()
+    for i, p in enumerate(paths, 1):
+        print(f" {i:>3}) {'  ' * (len(p) - 1)}{p[-1]}")
+    while True:
+        raw = ask("Números (ex.: 1,3,5-8; n = cancelar)", "n")
+        if raw.lower() in ("n", "nao", "não"):
+            return None
+        nums = parse_numbers(raw, len(paths))
+        if nums:
+            return {paths[k - 1] for k in nums}      # só o último segmento de cada um muda
+        print("  Seleção inválida.")
+
+def build_newseg(selected, method, src_lang, dcache):
+    ordered = sorted(selected, key=lambda p: tuple(s.lower() for s in p))
+    auto = {}
+    if method in ("1", "3"):
+        auto = auto_names({p[-1] for p in selected}, src_lang, dcache)
+    newseg, memo = {}, {}
+    for p in ordered:
+        seg = p[-1]
+        if method == "1":
+            new = auto.get(seg, seg)
+        else:
+            suggestion = memo.get(seg) or (auto.get(seg, seg) if method == "3" else seg)
+            while True:
+                new = ask(f"  {SEP.join(p)}", suggestion)
+                if new and SEP not in new:
+                    break
+                print(f"  Nome vazio ou contendo '{SEP}' não é válido.")
+            memo[seg] = new                       # mesmo segmento -> mesma sugestão
+        if new != seg:
+            newseg[p] = new
+    return newseg
+
+def final_name(name, newseg):
+    p = tuple(name.split(SEP))
+    return SEP.join(newseg.get(p[:i + 1], p[i]) for i in range(len(p)))
+
+def rename_decks():
+    decks = [(d.id, d.name) for d in col.decks.all_names_and_ids(
+        skip_empty_default=True, include_filtered=False) if d.name != "Default"]
+    if not decks or not yes("\nTraduzir/alterar nomes de baralhos?", "n"):
+        return
+    selected = pick_scope(decks)
+    if not selected:
+        return
+    src_lang = next(iter(picked)) if len(picked) == 1 else None
+    dcache = load_deck_cache()
+
+    while True:
+        method = choose("Como alterar os nomes?",
+                        {"1": "Automático (DeepL)",
+                         "2": "Manual (você digita; Enter mantém o atual)",
+                         "3": "Revisar um a um (sugestão do DeepL; Enter aceita)"}, "1")
+        newseg = build_newseg(selected, method, src_lang, dcache)
+        plan = {did: (old, final_name(old, newseg)) for did, old in decks}
+        plan = {did: v for did, v in plan.items() if v[0] != v[1]}
+        if not plan:
+            log("nenhum nome de baralho mudou")
+            return
+
+        print("\n=== Nomes de baralhos ===")
+        for old, new in sorted(plan.values()):
+            print(f"  {old}  ->  {new}")
+
+        finals = collections.defaultdict(list)       # Anki ignora maiúsculas/minúsculas
+        for did, old in decks:
+            finals[(plan[did][1] if did in plan else old).lower()].append(did)
+        dups = [k for k, v in finals.items() if len(v) > 1]
+        if dups:
+            print("\nConflito: mais de um baralho ficaria com o mesmo nome:")
+            for k in dups:
+                print(f"  {k}")
+            if not yes("Tentar de novo?", "s"):
+                return
+            continue
+        if yes("\nAplicar?", "s"):
+            break
+        if not yes("Tentar de novo?", "n"):
+            return
+
+    done = 0
+    for did, (old, new) in sorted(plan.items(), key=lambda kv: kv[1][0].count(SEP)):
+        if col.decks.name(did) == new:               # o pai já arrastou o filho
+            done += 1
+            continue
+        try:
+            col.decks.rename(did, new)               # pais antes dos filhos
+            done += 1
+        except Exception as e:
+            log(f"  não consegui renomear '{old}': {e}")
+    log(f"baralhos renomeados: {done}/{len(plan)}")
+
+rename_decks()
 log("exportando...")
 col.export_anki_package(out_path=OUT, options=ExportAnkiPackageOptions(
     with_scheduling=False, with_deck_configs=False, with_media=True, legacy=False), limit=None)

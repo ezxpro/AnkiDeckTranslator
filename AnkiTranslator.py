@@ -27,6 +27,7 @@ def load_key():
 
 KEY = load_key()
 BATCH, SAMPLE, MIN_RATIO = 40, 10, 0.6
+CACHE_FILE = Path(__file__).resolve().parent / "cache.json"   # sempre ao lado do script
 
 def log(*a): print(time.strftime("%H:%M:%S"), *a, flush=True)
 def ask(msg, default):
@@ -51,6 +52,39 @@ log("uso atual DeepL:", tr.get_usage().character)
 tlangs = tr.get_target_languages()
 tcodes = {l.code for l in tlangs}
 src_names = {l.code: l.name for l in tr.get_source_languages()}
+
+# ---- cache: traduções (por idioma de saída + texto) e idiomas detectados (por arquivo) ----
+def load_cache():
+    data = {}
+    if CACHE_FILE.exists():
+        try:
+            data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            bak = CACHE_FILE.with_name(CACHE_FILE.name + ".bak")
+            CACHE_FILE.replace(bak)
+            log(f"cache.json estava ilegível; guardei uma cópia em {bak.name} e comecei um novo")
+            data = {}
+    if data and data.get("version") != 2:   # formato antigo: chaves "SAIDA|ORIGEM|texto"
+        old, data, migrated = data, {}, 0
+        data["trans"] = {}
+        for k, v in old.items():
+            parts = k.split("|", 2)
+            if len(parts) == 3 and parts[0] in tcodes:
+                data["trans"].setdefault(parts[0], {})[parts[2]] = v
+                migrated += 1
+        log(f"cache antigo convertido: {migrated} traduções aproveitadas")
+    data["version"] = 2
+    data.setdefault("trans", {})
+    data.setdefault("detect", {})
+    return data
+
+def save_cache():
+    tmp = CACHE_FILE.with_name(CACHE_FILE.name + ".tmp")   # grava num temporário e troca:
+    tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(CACHE_FILE)                                # fechar o programa não corrompe
+
+cache = load_cache()
+log(f"cache: {sum(len(t) for t in cache['trans'].values())} traduções guardadas em {CACHE_FILE}")
 
 # ---- perguntas ----
 SRC = os.path.abspath(ask("Arquivo de entrada", "italian.apkg"))
@@ -95,14 +129,26 @@ for n in notes:
             vals[(n.mid, f)].append(v)
 
 # ---- 1) detecta o idioma de cada campo ----
-log(f"detectando o idioma de {len(vals)} campos (amostra de até {SAMPLE} textos cada)...")
+fp = f"{os.path.basename(SRC)}|{os.path.getsize(SRC)}|{int(os.path.getmtime(SRC))}"   # identifica o arquivo
+det_cache = cache["detect"].setdefault(fp, {})
 detected = {}   # (mid, campo) -> (idioma, proporção, exemplo)
+novos = 0
 for (mid, f), vs in vals.items():
-    sample = random.sample(vs, min(SAMPLE, len(vs)))
-    res = tr.translate_text([plain(s) for s in sample], target_lang=TARGET)
-    lang, cnt = collections.Counter(r.detected_source_lang for r in res).most_common(1)[0]
-    ex = re.sub(r"\s+", " ", plain(sample[0]))[:45]
-    detected[(mid, f)] = (lang, cnt / len(res), ex)
+    key = f"{names[mid]}|{f}"
+    if key not in det_cache:
+        if novos == 0:
+            log(f"detectando o idioma dos campos (amostra de até {SAMPLE} textos cada)...")
+        sample = random.sample(vs, min(SAMPLE, len(vs)))
+        res = tr.translate_text([plain(s) for s in sample], target_lang=TARGET)
+        lang, cnt = collections.Counter(r.detected_source_lang for r in res).most_common(1)[0]
+        ex = re.sub(r"\s+", " ", plain(sample[0]))[:45]
+        det_cache[key] = [lang, cnt / len(res), ex]
+        novos += 1
+    detected[(mid, f)] = tuple(det_cache[key])
+if novos:
+    save_cache()
+else:
+    log("idiomas já detectados antes (cache): nenhum caractere gasto na detecção")
 
 # ---- 2) mostra tudo ----
 print("\n=== Idioma detectado em cada campo ===")
@@ -156,15 +202,19 @@ chosen = {k: (lang, TARGET) for k, (lang, ratio, _) in detected.items()
           if lang in picked and ratio >= MIN_RATIO}
 log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
 
-# ---- traduz (cache por idioma de saída e de origem) ----
-cache_file = "cache.json"
-cache = json.load(open(cache_file, encoding="utf-8")) if os.path.exists(cache_file) else {}
-todo = collections.defaultdict(set)   # (origem, saída) -> textos
+# ---- traduz (cache por idioma de saída + texto) ----
+trans = cache["trans"]
+todo = collections.defaultdict(list)   # (origem, saída) -> textos
+queued, hits = set(), 0
 for (mid, f), (L, T) in chosen.items():
+    tc = trans.get(T, {})
     for v in vals[(mid, f)]:
-        if f"{T}|{L}|{v}" not in cache:
-            todo[(L, T)].add(v)
-log("a traduzir:", sum(len(s) for s in todo.values()))
+        if v in tc:
+            hits += 1
+        elif (T, v) not in queued:
+            queued.add((T, v))
+            todo[(L, T)].append(v)
+log(f"a traduzir: {len(queued)} (já estavam no cache: {hits})")
 
 for (L, T), texts in todo.items():
     texts = sorted(texts)
@@ -183,8 +233,8 @@ for (L, T), texts in todo.items():
             out = unmask(r.text)
             ok = PROT.findall(out) == PROT.findall(src)
             if not ok: log("  tag danificada, mantido original:", plain(src)[:50])
-            cache[f"{T}|{L}|{src}"] = out if ok else src
-        json.dump(cache, open(cache_file, "w", encoding="utf-8"), ensure_ascii=False)
+            trans.setdefault(T, {})[src] = out if ok else src
+        save_cache()
         log(f"  [{L}->{T}] {min(i + BATCH, len(texts))}/{len(texts)}")
 
 # ---- aplica e exporta ----
@@ -193,7 +243,7 @@ for n in notes:
     for f, v in n.items():
         c = chosen.get((n.mid, f))
         if c:
-            new = cache.get(f"{c[1]}|{c[0]}|{v}", v)
+            new = trans.get(c[1], {}).get(v, v)
             if new != v:
                 n[f] = new; mudou = True
     if mudou: col.update_note(n)

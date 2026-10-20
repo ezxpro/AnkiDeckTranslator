@@ -1,12 +1,15 @@
-# pip install anki deepl
+# pip install anki   (+ deepl, se for usar o serviço DeepL)
 
-import argparse, json, os, re, sys, time, random, tempfile, collections, hashlib, threading, deepl
+import argparse, json, os, re, sys, time, random, tempfile, collections, hashlib, threading
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from anki.collection import (Collection, ImportAnkiPackageRequest,
                              ImportAnkiPackageOptions, ExportAnkiPackageOptions)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-BATCH, SAMPLE, MIN_RATIO = 40, 10, 0.6
+SAMPLE, MIN_RATIO = 10, 0.6
+DEFAULT_PROVIDER = "deepl"
 SEP = "::"
 
 
@@ -137,51 +140,187 @@ h = TextTools.h
 
 
 # ======================================================================
-# DeepL
+# Provedores de tradução
 # ======================================================================
-class DeepLClient:
-    """Encapsula a chave, o tradutor e as chamadas com retentativa."""
+@dataclass(frozen=True)
+class Language:
+    code: str                                  # código na grafia do próprio provedor
+    name: str
+
+
+@dataclass(frozen=True)
+class TranslationResult:
+    text: str
+    detected_source_lang: str = None           # idioma detectado (grafia do provedor)
+
+
+def lang_base(code):
+    """'pt-BR' / 'PT_br' / 'PT' -> 'PT': compara idiomas ignorando região e maiúsculas."""
+    return re.split(r"[-_]", (code or "").upper())[0]
+
+
+def load_secret(env_name, label):
+    """Procura a chave na variável de ambiente <env_name>; se não achar, lê o arquivo .env
+    que fica na mesma pasta do script (linha no formato NOME=valor)."""
+    key = os.environ.get(env_name, "").strip()
+    if not key:
+        env_file = SCRIPT_DIR / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, value = line.split("=", 1)
+                if name.replace("export", "").strip() == env_name:
+                    key = value.strip().strip('"').strip("'")
+                    break
+    if not key:
+        raise SystemExit(f"Chave do {label} não encontrada. Defina a variável de ambiente "
+                         f"{env_name} ou crie um arquivo .env ao lado do script com:\n"
+                         f"{env_name}=sua-chave-aqui")
+    return key
+
+
+PROVIDERS = {}                                 # nome -> classe; preenchido por @register_provider
+
+
+def register_provider(cls):
+    PROVIDERS[cls.name] = cls
+    return cls
+
+
+def make_provider(name):
+    if name not in PROVIDERS:
+        raise SystemExit(f"Serviço de tradução desconhecido: {name}. "
+                         f"Disponíveis: {', '.join(sorted(PROVIDERS))}")
+    return PROVIDERS[name]()
+
+
+class TranslationProvider(ABC):
+    """Contrato de um serviço de tradução. O restante do programa só conhece esta interface.
+
+    Para adicionar outro serviço (Google, Azure, LibreTranslate, ...):
+      1. crie uma subclasse com name, label e key_env;
+      2. implemente connect, fetch_target_languages, fetch_source_languages e _translate
+         (e, se houver, usage e detect);
+      3. decore a classe com @register_provider.
+    Ele passa a valer em --provider e no menu interativo, com cache próprio
+    (cache_<name>.json). Se o serviço não entende HTML com translate="no", sobrescreva
+    mask/unmask para proteger [sound:...] e {{c1::...}} de outra forma."""
+
+    name = ""                                  # identificador usado em --provider
+    label = ""                                 # nome para exibição
+    key_env = ""                               # variável de ambiente / .env com a chave
+    default_target = "PT-BR"                   # código sugerido como idioma de saída
+    batch_size = 40                            # textos por chamada
+    retries = 3
+    transient_errors = (ConnectionError, TimeoutError)   # erros que valem nova tentativa
+    cache_tag = None                           # None -> "_<name>" nos nomes dos arquivos de cache
 
     def __init__(self, key=None):
-        self.key = key or self.load_key()
-        self.tr = deepl.Translator(self.key)
-        self.target_langs = self.tr.get_target_languages()
+        self.key = key or load_secret(self.key_env, self.label)
+        self.connect(self.key)
+        self.target_langs = self.fetch_target_languages()
+        self.source_langs = self.fetch_source_languages()
         self.target_codes = {l.code for l in self.target_langs}
-        self.source_names = {l.code: l.name for l in self.tr.get_source_languages()}
+        self.source_names = {l.code: l.name for l in self.source_langs}
+        self._target_by_norm = {l.code.upper(): l.code for l in self.target_langs}
 
-    @staticmethod
-    def load_key():
-        """Procura DEEPL_KEY na variável de ambiente; se não achar, lê o arquivo .env
-        que fica na mesma pasta do script (linha no formato DEEPL_KEY=sua-chave:fx)."""
-        key = os.environ.get("DEEPL_KEY", "").strip()
-        if not key:
-            env_file = SCRIPT_DIR / ".env"
-            if env_file.exists():
-                for line in env_file.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    name, value = line.split("=", 1)
-                    if name.replace("export", "").strip() == "DEEPL_KEY":
-                        key = value.strip().strip('"').strip("'")
-                        break
-        if not key:
-            raise SystemExit("Chave do DeepL não encontrada. Defina a variável de ambiente "
-                             "DEEPL_KEY ou crie um arquivo .env ao lado do script com:\n"
-                             "DEEPL_KEY=sua-chave-aqui:fx")
-        return key
+    # ---- a implementar em cada serviço ----
+    @abstractmethod
+    def connect(self, key):
+        """Cria o cliente do serviço (e ajusta transient_errors, se preciso)."""
+
+    @abstractmethod
+    def fetch_target_languages(self):
+        """-> lista de Language disponíveis como saída."""
+
+    @abstractmethod
+    def fetch_source_languages(self):
+        """-> lista de Language reconhecidos como origem."""
+
+    @abstractmethod
+    def _translate(self, texts, target_lang, source_lang, html):
+        """Uma chamada ao serviço. Devolve uma TranslationResult por texto, na mesma ordem.
+        html=True: os textos contêm tags <span translate="no"> que não podem ser traduzidas."""
+
+    def usage(self):
+        """Consumo atual (para exibir), ou None se o serviço não informa."""
+        return None
+
+    def detect(self, texts, target_lang):
+        """Idioma de cada texto (None se o serviço estiver fora do ar). Por padrão traduz e
+        lê o idioma detectado; sobrescreva se o serviço tiver um endpoint de detecção."""
+        res = self.translate(texts, target_lang)
+        return None if res is None else [r.detected_source_lang for r in res]
+
+    # ---- comum a todos ----
+    def mask(self, t):
+        return TextTools.mask(t)
+
+    def unmask(self, t):
+        return TextTools.unmask(t)
+
+    def translate(self, texts, target_lang, source_lang=None, protect_tags=False):
+        """Traduz com retentativa; devolve None se o serviço não responder.
+        protect_tags=True protege [sound:...] e {{c1::...}} (restaurados no resultado)."""
+        payload = [self.mask(t) for t in texts] if protect_tags else list(texts)
+        for _ in range(self.retries):
+            try:
+                res = self._translate(payload, target_lang, source_lang, protect_tags)
+                break
+            except self.transient_errors:
+                time.sleep(3)
+        else:
+            return None
+        if protect_tags:
+            res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
+        return res
+
+    def resolve_target(self, raw):
+        """Texto digitado -> código de saída válido (grafia do serviço), ou None."""
+        return self._target_by_norm.get((raw or "").strip().upper())
+
+    def cache_file(self, stem):
+        tag = f"_{self.name}" if self.cache_tag is None else self.cache_tag
+        return SCRIPT_DIR / f"{stem}{tag}.json"
+
+
+@register_provider
+class DeepLProvider(TranslationProvider):
+    name, label, key_env = "deepl", "DeepL", "DEEPL_KEY"
+    cache_tag = ""                             # mantém os arquivos cache.json / deck_cache.json
+
+    def connect(self, key):
+        import deepl                           # importado aqui: só quem usa DeepL precisa dele
+        self.tr = deepl.Translator(key)
+        self.transient_errors = (deepl.ConnectionException,)
+
+    def fetch_target_languages(self):
+        return [Language(l.code, l.name) for l in self.tr.get_target_languages()]
+
+    def fetch_source_languages(self):
+        return [Language(l.code, l.name) for l in self.tr.get_source_languages()]
 
     def usage(self):
         return self.tr.get_usage().character
 
-    def translate(self, texts, retries=3, **kwargs):
-        """Traduz com até 'retries' tentativas; devolve None se o DeepL não responder."""
-        for _ in range(retries):
-            try:
-                return self.tr.translate_text(texts, **kwargs)
-            except deepl.ConnectionException:
-                time.sleep(3)
-        return None
+    def _translate(self, texts, target_lang, source_lang, html):
+        res = self.tr.translate_text(texts, source_lang=source_lang, target_lang=target_lang,
+                                     tag_handling="html" if html else None)
+        return [TranslationResult(r.text, r.detected_source_lang) for r in res]
+
+
+def choose_provider(opts):
+    """Serviço de tradução: --provider, ou pergunta (se houver mais de um), ou o padrão."""
+    name = getattr(opts, "provider", None)
+    if not name and len(PROVIDERS) > 1 and not Ui.auto:
+        keys = {str(i): n for i, n in enumerate(sorted(PROVIDERS), 1)}
+        default = next(k for k, n in keys.items() if n == DEFAULT_PROVIDER)
+        key = Ui.choose("Serviço de tradução:",
+                        {k: PROVIDERS[n].label for k, n in keys.items()}, default)
+        name = keys[key]
+    return make_provider(name or DEFAULT_PROVIDER)
 
 
 # ======================================================================
@@ -257,7 +396,7 @@ class TranslationCache:
 
 
 class DeckNameCache:
-    """deck_cache.json, separado do cache.json. Só a saída bruta do DeepL é gravada;
+    """deck_cache.json, separado do cache.json. Só a saída bruta do serviço é gravada;
     nomes digitados à mão nunca vão para o cache."""
 
     def __init__(self, path):
@@ -376,9 +515,12 @@ class FieldLanguageDetector:
             if fresh:
                 if sent == 0:
                     log(f"detectando o idioma dos campos (amostra de até {SAMPLE} textos cada)...")
-                res = self.client.tr.translate_text(fresh, target_lang=self.target)
-                for p, r in zip(fresh, res):
-                    lang_cache[h(p)] = r.detected_source_lang
+                langs = self.client.detect(fresh, self.target)
+                if langs is None:
+                    raise SystemExit(f"{self.client.label} fora do ar; rode de novo "
+                                     f"(o cache preserva o progresso).")
+                for p, lang in zip(fresh, langs):
+                    lang_cache[h(p)] = lang
                 sent += len(fresh)
             reused += len(pick)
             sample = pick + fresh
@@ -413,26 +555,28 @@ class FieldTranslator:
                 elif (L, T, v) not in queued:
                     queued.add((L, T, v))
                     todo[(L, T)].append(v)
-        chars = sum(len(TextTools.mask(v)) for (_, _, v) in queued)
+        chars = sum(len(self.client.mask(v)) for (_, _, v) in queued)
         log(f"a traduzir: {len(queued)} textos (~{chars} caracteres); "
             f"já estavam no cache (sem custo): {len(cached)}")
 
         for (L, T), texts in todo.items():
             texts = sorted(texts)
-            for i in range(0, len(texts), BATCH):
-                chunk = texts[i:i + BATCH]
-                res = self.client.translate([TextTools.mask(t) for t in chunk],
-                                            source_lang=L, target_lang=T, tag_handling="html")
+            step = self.client.batch_size
+            for i in range(0, len(texts), step):
+                chunk = texts[i:i + step]
+                res = self.client.translate(chunk, target_lang=T, source_lang=L,
+                                            protect_tags=True)
                 if res is None:
-                    raise SystemExit("DeepL fora do ar; rode de novo (o cache preserva o progresso).")
+                    raise SystemExit(f"{self.client.label} fora do ar; rode de novo "
+                                     f"(o cache preserva o progresso).")
                 for src, r in zip(chunk, res):
-                    out = TextTools.unmask(r.text)
+                    out = r.text
                     ok = TextTools.PROT.findall(out) == TextTools.PROT.findall(src)
                     if not ok:
                         log(" tag danificada, mantido original:", TextTools.plain(src)[:50])
                     self.cache.put(T, L, src, out if ok else src)
                 self.cache.save()
-                log(f" [{L}->{T}] {min(i + BATCH, len(texts))}/{len(texts)}")
+                log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
 
 
 # ======================================================================
@@ -446,7 +590,7 @@ class DeckRenamer:
     def __init__(self, anki, client, target, picked, cache, opts):
         self.opts = opts
         self.anki, self.client = anki, client
-        self.target, self.tbase = target, target.split("-")[0]
+        self.target, self.tbase = target, lang_base(target)
         self.picked = picked
         self.cache = cache
 
@@ -500,14 +644,15 @@ class DeckRenamer:
         pending = sorted(s for s in segments if s not in bucket)
         log(f"nomes de baralhos: {len(pending)} a traduzir "
             f"({len(segments) - len(pending)} já no cache)")
-        for i in range(0, len(pending), BATCH):
-            chunk = pending[i:i + BATCH]
-            res = self.client.translate(chunk, source_lang=src_lang, target_lang=self.target)
+        step = self.client.batch_size
+        for i in range(0, len(pending), step):
+            chunk = pending[i:i + step]
+            res = self.client.translate(chunk, target_lang=self.target, source_lang=src_lang)
             if res is None:
-                log("DeepL fora do ar; nomes restantes ficam como estão")
+                log(f"{self.client.label} fora do ar; nomes restantes ficam como estão")
                 break
             for s, r in zip(chunk, res):
-                already = r.detected_source_lang == self.tbase    # já está no idioma de saída
+                already = lang_base(r.detected_source_lang) == self.tbase  # já no idioma de saída
                 bucket[s] = s if already else self.clean_seg(r.text, s)
             self.cache.save()
         return {s: bucket.get(s, s) for s in segments}
@@ -563,9 +708,9 @@ class DeckRenamer:
 
         while True:
             method = fixed_method or Ui.choose("Como alterar os nomes?",
-                               {"1": "Automático (DeepL)",
+                               {"1": f"Automático ({self.client.label})",
                                 "2": "Manual (você digita; Enter mantém o atual)",
-                                "3": "Revisar um a um (sugestão do DeepL; Enter aceita)"}, "1")
+                                "3": f"Revisar um a um (sugestão do {self.client.label}; Enter aceita)"}, "1")
             newseg = self.build_newseg(selected, method, src_lang)
             plan = {did: (old, self.final_name(old, newseg)) for did, old in decks}
             plan = {did: v for did, v in plan.items() if v[0] != v[1]}
@@ -619,10 +764,12 @@ class AnkiTranslatorApp:
     def __init__(self, opts):
         self.opts = opts
         Ui.auto = opts.yes
-        self.client = DeepLClient()
-        log("uso atual DeepL:", self.client.usage())
-        self.cache = TranslationCache(SCRIPT_DIR / "cache.json", self.client.target_codes)
-        self.deck_cache = DeckNameCache(SCRIPT_DIR / "deck_cache.json")
+        self.client = choose_provider(opts)
+        usage = self.client.usage()
+        if usage is not None:
+            log(f"uso atual {self.client.label}:", usage)
+        self.cache = TranslationCache(self.client.cache_file("cache"), self.client.target_codes)
+        self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache"))
         log(f"cache: {self.cache.count()} traduções e {len(self.cache.lang)} idiomas "
             f"de texto guardados em {self.cache.path}")
         self.anki = None
@@ -634,21 +781,22 @@ class AnkiTranslatorApp:
 
     def ask_target(self):
         if self.opts.target:
-            target = self.opts.target.strip().upper()
-            if target not in self.client.target_codes:
-                raise SystemExit(f"Idioma de saída inválido: {target}. "
-                                 f"Use --list-langs para ver os códigos.")
+            target = self.client.resolve_target(self.opts.target)
+            if not target:
+                raise SystemExit(f"Idioma de saída inválido: {self.opts.target}. "
+                                 f"Use o comando 'langs' para ver os códigos.")
         else:
             if not Ui.auto:
                 Ui.show_langs("Idiomas de saída disponíveis (código nome):",
                               self.client.target_langs)
             while True:
-                target = Ui.ask("Idioma de saída (Enter = português do Brasil, "
-                                "ou digite um código da lista acima)", "PT-BR").upper()
-                if target in self.client.target_codes:
+                raw = Ui.ask("Idioma de saída (Enter = português do Brasil, "
+                             "ou digite um código da lista acima)", self.client.default_target)
+                target = self.client.resolve_target(raw)
+                if target:
                     break
-                print(f" '{target}' não é um código válido. Use um dos códigos da lista acima.")
-        self.target, self.tbase = target, target.split("-")[0]
+                print(f" '{raw}' não é um código válido. Use um dos códigos da lista acima.")
+        self.target, self.tbase = target, lang_base(target)
 
     def show_detected(self, detected):
         print("\n=== Idioma detectado em cada campo ===")
@@ -675,9 +823,9 @@ class AnkiTranslatorApp:
     def ask_languages(self, detected):
         counts = collections.Counter(
             lang for (lang, ratio, _) in detected.values()
-            if ratio >= MIN_RATIO and lang != self.tbase)
+            if ratio >= MIN_RATIO and lang_base(lang) != self.tbase)
         already = sum(1 for (lang, ratio, _) in detected.values()
-                      if ratio >= MIN_RATIO and lang == self.tbase)
+                      if ratio >= MIN_RATIO and lang_base(lang) == self.tbase)
         options = counts.most_common()
         if not options:
             self.anki.close()
@@ -744,11 +892,13 @@ class AnkiTranslatorApp:
         self.anki.export(out)
         self.anki.close()
         log("pronto ->", out)
-        log("uso DeepL ao final:", self.client.usage())
+        usage = self.client.usage()
+        if usage is not None:
+            log(f"uso {self.client.label} ao final:", usage)
 
 
 # ======================================================================
-# Inverter cartões (modo separado, sem DeepL)
+# Inverter cartões (comando separado, sem serviço de tradução)
 # ======================================================================
 def ask_input(opts):
     """Pergunta (ou lê das opções) o .apkg de entrada."""
@@ -768,10 +918,11 @@ def ask_paths(opts, suffix="_out"):
 
 
 class CardReverser:
-    """Inverte frente e verso trocando, nos templates dos cartões, as referências aos dois
-    campos escolhidos ({{Frente}} <-> {{Verso}}). O conteúdo das notas não muda e a operação
-    é reversível: rodar de novo desfaz. Só entram tipos de nota padrão com 2+ campos
-    (o tipo cloze, que tem um campo único, fica de fora)."""
+    """Inverte frente e verso trocando, nos templates dos cartões, as referências a PARES de
+    campos ({{Palavra}} <-> {{Tradução}}). Vários pares são trocados de uma vez, o que é
+    necessário quando cada lado tem campos de áudio, frase etc. O conteúdo das notas não
+    muda e a operação é reversível: rodar de novo desfaz. Só entram tipos de nota padrão com
+    2+ campos (o tipo cloze, que tem um campo único, fica de fora)."""
 
     REF = re.compile(r"\{\{([#^/]?)((?:[^{}:]*:)*)([^{}:]+)\}\}")
     STANDARD = 0                                          # no Anki, cloze é 1
@@ -780,22 +931,79 @@ class CardReverser:
         self.anki, self.opts = anki, opts
         self.counts = {}                                  # id do tipo de nota -> nº de notas
 
+    # ---- templates ----
     @classmethod
-    def swap_refs(cls, tmpl, a, b):
-        """Troca as referências aos campos a e b num template (numa única passada),
-        preservando filtros e seções: {{type:A}}, {{hint:A}}, {{#A}}...{{/A}}."""
+    def swap_refs(cls, tmpl, mapping):
+        """Troca as referências a campos num template, numa única passada, conforme
+        'mapping' ({A: B, B: A}). Preserva filtros e seções: {{type:A}}, {{#A}}...{{/A}}."""
         def sub(m):
             prefix, filters, name = m.groups()
-            n = name.strip()
-            if n == a:
-                name = b
-            elif n == b:
-                name = a
-            else:
+            new = mapping.get(name.strip())
+            if new is None:
                 return m.group(0)
-            return "{{" + prefix + filters + name + "}}"
+            return "{{" + prefix + filters + new + "}}"
         return cls.REF.sub(sub, tmpl)
 
+    @classmethod
+    def refs(cls, tmpl, names):
+        """Campos citados no template, na ordem em que aparecem."""
+        seen = []
+        for m in cls.REF.finditer(tmpl):
+            n = m.group(3).strip()
+            if n in names and n not in seen:
+                seen.append(n)
+        return seen
+
+    @classmethod
+    def layout(cls, nt):
+        """(campos mostrados na frente, campos que só aparecem no verso), pelo 1º template."""
+        names = [f["name"] for f in nt["flds"]]
+        t = nt["tmpls"][0]
+        front = cls.refs(t["qfmt"], names)
+        back = [n for n in cls.refs(t["afmt"], names) if n not in front]
+        return front, back
+
+    @classmethod
+    def suggest_pairs(cls, nt):
+        """Pares de campos a trocar. 1º: por nome, quando o nome de um campo termina com o
+        de outro ('Word' / 'TranslationWord', 'WordAudio' / 'TranslationWordAudio').
+        2º: pelo layout do template (1º campo da frente / 1º campo só do verso).
+        3º: os dois primeiros campos."""
+        names = [f["name"] for f in nt["flds"]]
+        pairs, used = [], set()
+        for a in names:
+            if a in used:
+                continue
+            cands = [b for b in names if b not in used and len(b) > len(a)
+                     and b.lower().endswith(a.lower())]
+            if len(cands) == 1:
+                pairs.append((a, cands[0]))
+                used.update((a, cands[0]))
+        if pairs:
+            return pairs
+        front, back = cls.layout(nt)
+        if front and back:
+            return [(front[0], back[0])]
+        return [(names[0], names[1])]
+
+    @staticmethod
+    def parse_pairs(raw, names):
+        """'A=B, C=D' -> [(A, B), (C, D)] com a grafia real dos campos; None se inválido
+        (campo inexistente, repetido ou pareado consigo mesmo)."""
+        lower = {n.lower(): n for n in names}
+        pairs, used = [], set()
+        for item in re.split(r"[,;]+", raw):
+            if not item.strip():
+                continue
+            parts = [p.strip().lower() for p in re.split(r"<->|=", item)]
+            if (len(parts) != 2 or parts[0] == parts[1] or used & set(parts)
+                    or any(p not in lower for p in parts)):
+                return None
+            used.update(parts)
+            pairs.append((lower[parts[0]], lower[parts[1]]))
+        return pairs or None
+
+    # ---- seleção ----
     def eligible(self):
         out, skipped = [], 0
         for nt in self.anki.notetypes():
@@ -826,8 +1034,8 @@ class CardReverser:
             return cands
         print("\n=== Tipos de nota que podem ser invertidos ===")
         for i, nt in enumerate(cands, 1):
-            names = ", ".join(f["name"] for f in nt["flds"])
-            print(f" {i}) {nt['name']} ({self.counts[nt['id']]} notas) - campos: {names}")
+            print(f" {i}) {nt['name']} ({self.counts[nt['id']]} notas, "
+                  f"{len(nt['flds'])} campos)")
         while True:
             raw = Ui.ask("\nQuais inverter? (todos, ou números ex.: 1,3; n = cancelar)", "todos")
             if raw.lower() in ("n", "nao", "não"):
@@ -839,63 +1047,58 @@ class CardReverser:
                 return [cands[k - 1] for k in sorted(nums)]
             print(" Seleção inválida.")
 
-    @staticmethod
-    def parse_pair(raw, names):
-        """'A,B' -> (A, B) com a grafia real dos campos, ou None se inválido."""
-        parts = [p.strip().lower() for p in raw.split(",")]
-        lower = {n.lower(): n for n in names}
-        if len(parts) == 2 and parts[0] != parts[1] and all(p in lower for p in parts):
-            return lower[parts[0]], lower[parts[1]]
-        return None
+    def show_layout(self, nt, pairs):
+        front, back = self.layout(nt)
+        paired = {n for p in pairs for n in p}
+        stay = [f["name"] for f in nt["flds"] if f["name"] not in paired]
+        print(f"\n {nt['name']} ({self.counts[nt['id']]} notas)")
+        print(f"   Frente hoje: {', '.join(front) or '-'}")
+        print(f"   Verso hoje:  {', '.join(back) or '-'}")
+        print("   Troca sugerida (cada campo passa a ocupar o lugar do outro):")
+        for a, b in pairs:
+            print(f"     {a}  <->  {b}")
+        if stay:
+            print(f"   Não mudam de lado: {', '.join(stay)}")
 
-    @classmethod
-    def default_pair(cls, nt, names):
-        """Frente = primeiro campo do template da pergunta; verso = primeiro campo que só
-        aparece na resposta. Se não der para inferir, usa os dois primeiros campos."""
-        def refs(tmpl):
-            seen = []
-            for m in cls.REF.finditer(tmpl):
-                n = m.group(3).strip()
-                if n in names and n not in seen:
-                    seen.append(n)
-            return seen
-        t = nt["tmpls"][0]
-        front = refs(t["qfmt"])
-        back = [n for n in refs(t["afmt"]) if n not in front]
-        if front and back:
-            return front[0], back[0]
-        return names[0], names[1]
-
-    def pick_fields(self, nt):
+    def pick_pairs(self, nt):
         names = [f["name"] for f in nt["flds"]]
-        if self.opts.fields:
-            pair = self.parse_pair(self.opts.fields, names)
-            if not pair:
-                log(f" {nt['name']}: não tem os campos {self.opts.fields}; ignorado")
-            return pair
-        pair = self.default_pair(nt, names)
-        if len(names) > 2 and not Ui.auto:
-            while True:
-                raw = Ui.ask(f" {nt['name']} - campos a trocar ({', '.join(names)})",
-                             ",".join(pair))
-                pair = self.parse_pair(raw, names)
-                if pair:
-                    break
-                print(" Informe dois campos existentes separados por vírgula.")
-        return pair
+        if self.opts.swap:
+            pairs = self.parse_pairs(",".join(self.opts.swap), names)
+            if not pairs:
+                log(f" {nt['name']}: não tem os campos de --swap; ignorado")
+            return pairs
+        pairs = self.suggest_pairs(nt)
+        if Ui.auto or len(names) == 2:                    # com 2 campos não há o que escolher
+            return pairs
+        self.show_layout(nt, pairs)
+        while True:
+            raw = Ui.ask(" Aceitar a troca sugerida? (n = pular este tipo, "
+                         "ou digite os pares: A=B, C=D)", "ok")
+            if raw.lower() in ("ok", "s", "sim", "y", "yes"):
+                return pairs
+            if raw.lower() in ("n", "nao", "não"):
+                return None
+            custom = self.parse_pairs(raw, names)
+            if custom:
+                return custom
+            print(f" Pares inválidos. Use nomes de campos deste tipo: {', '.join(names)}")
 
+    # ---- aplicação ----
     def apply(self, plan):
         models = self.anki.col.models
         save = getattr(models, "update_dict", None) or models.save
         done = 0
-        for nt, a, b in plan:
+        for nt, pairs in plan:
+            mapping = {}
+            for a, b in pairs:
+                mapping[a], mapping[b] = b, a
             changed = False
             for t in nt["tmpls"]:
-                q, ans = self.swap_refs(t["qfmt"], a, b), self.swap_refs(t["afmt"], a, b)
+                q, ans = self.swap_refs(t["qfmt"], mapping), self.swap_refs(t["afmt"], mapping)
                 changed |= (q != t["qfmt"] or ans != t["afmt"])
                 t["qfmt"], t["afmt"] = q, ans
             if not changed:
-                log(f" {nt['name']}: nenhum template usa {a} ou {b}; ignorado")
+                log(f" {nt['name']}: nenhum template usa os campos escolhidos; ignorado")
                 continue
             save(nt)
             done += 1
@@ -910,22 +1113,24 @@ class CardReverser:
             return 0
         plan = []
         for nt in self.pick_notetypes(cands):
-            pair = self.pick_fields(nt)
-            if pair:
-                plan.append((nt, *pair))
+            pairs = self.pick_pairs(nt)
+            if pairs:
+                plan.append((nt, pairs))
         if not plan:
             return 0
         print("\n=== Inversão de cartões ===")
-        for nt, a, b in plan:
-            print(f" {nt['name']}: {a} <-> {b} "
-                  f"({self.counts[nt['id']]} notas, {len(nt['tmpls'])} template(s))")
+        for nt, pairs in plan:
+            print(f" {nt['name']} ({self.counts[nt['id']]} notas, "
+                  f"{len(nt['tmpls'])} template(s)):")
+            for a, b in pairs:
+                print(f"   {a}  <->  {b}")
         if not Ui.yes("\nAplicar?", "s"):
             return 0
         return self.apply(plan)
 
 
 class ReverseApp:
-    """Comando reverse: importar -> inverter cartões -> exportar. Não usa o DeepL."""
+    """Comando reverse: importar -> inverter cartões -> exportar. Não usa serviço de tradução."""
 
     def __init__(self, opts):
         self.opts = opts
@@ -960,6 +1165,12 @@ class InfoApp:
             kind = "cloze" if nt["type"] == 1 else "padrão"
             print(f" {nt['name']} [{kind}] - {n} notas, {len(nt['tmpls'])} template(s)")
             print(f"   campos: {', '.join(f['name'] for f in nt['flds'])}")
+            if nt["type"] == CardReverser.STANDARD and len(nt["flds"]) >= 2:
+                front, back = CardReverser.layout(nt)
+                print(f"   frente: {', '.join(front) or '-'}")
+                print(f"   verso:  {', '.join(back) or '-'}")
+                swap = ", ".join(f"{x}={y}" for x, y in CardReverser.suggest_pairs(nt))
+                print(f"   troca sugerida (--swap): {swap}")
         print("\n=== Baralhos ===")
         for _, name in sorted(anki.deck_list(), key=lambda d: d[1].lower()):
             parts = name.split(SEP)
@@ -971,7 +1182,7 @@ class InfoApp:
 # Linha de comando
 # ======================================================================
 COMMANDS = ("translate", "reverse", "info", "langs")
-MENU = {"1": ("translate", "Traduzir baralho (DeepL)"),
+MENU = {"1": ("translate", "Traduzir baralho (serviço de tradução)"),
         "2": ("reverse", "Inverter cartões (frente <-> verso)"),
         "3": ("info", "Ver informações do baralho (tipos de nota, campos, baralhos)")}
 
@@ -998,9 +1209,13 @@ def parse_args(argv=None):
 
     t = sub.add_parser(
         "translate", parents=[io, run_opts],
-        help="traduz os campos (e, opcionalmente, os nomes dos baralhos) com o DeepL",
-        description="Traduz os campos de um baralho com o DeepL. Saída padrão: <entrada>_out.apkg. "
+        help="traduz os campos (e, opcionalmente, os nomes dos baralhos)",
+        description="Traduz os campos de um baralho com um serviço de tradução (--provider). "
+                    "Saída padrão: <entrada>_out.apkg. "
                     "Com -y: PT-BR, todos os idiomas detectados, nomes de baralhos intactos.")
+    t.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICO",
+                   help=f"serviço de tradução: {', '.join(sorted(PROVIDERS))} "
+                        f"(padrão: {DEFAULT_PROVIDER})")
     t.add_argument("-t", "--target", metavar="CODIGO",
                    help="idioma de saída, ex.: PT-BR, EN-US (veja o comando 'langs')")
     t.add_argument("-l", "--lang", metavar="CODIGOS",
@@ -1010,28 +1225,31 @@ def parse_args(argv=None):
                    help="nomes de baralhos: none = não alterar, main = só os baralhos "
                         "principais, all = principais e secundários")
     t.add_argument("-m", "--deck-method", choices=["auto", "manual", "review", "keep"],
-                   help="como renomear baralhos: auto (DeepL), manual (você digita), "
-                        "review (sugestão do DeepL, um a um) ou keep (só os de --deck-name)")
+                   help="como renomear baralhos: auto (pelo serviço), manual (você digita), "
+                        "review (sugestão do serviço, um a um) ou keep (só os de --deck-name)")
     t.add_argument("--deck-name", action="append", metavar="ATUAL=NOVO",
                    help="renomeia o baralho de nome ATUAL (um nível, sem '::') para NOVO; "
                         "pode repetir. Sem -d/-m, só estes são renomeados")
 
     r = sub.add_parser(
         "reverse", parents=[io, run_opts],
-        help="inverte frente e verso dos cartões (sem tradução, sem DeepL)",
+        help="inverte frente e verso dos cartões (sem tradução)",
         description="Inverte frente e verso trocando os campos nos templates dos cartões. "
                     "Saída padrão: <entrada>_reversed.apkg. Rodar de novo desfaz. "
                     "Com -y: todos os tipos de nota (cloze não entra).")
     r.add_argument("--notetype", action="append", metavar="NOME",
                    help="inverte só este tipo de nota (pode repetir)")
-    r.add_argument("--fields", metavar="CAMPO1,CAMPO2",
-                   help="campos a trocar (padrão: inferidos do template de cada tipo de nota)")
+    r.add_argument("--swap", action="append", metavar="CAMPO1=CAMPO2",
+                   help="par de campos que trocam de lado; pode repetir (padrão: pares "
+                        "sugeridos para cada tipo de nota; veja o comando 'info')")
 
     sub.add_parser("info", parents=[io],
                    help="mostra tipos de nota, campos e baralhos de um .apkg",
                    description="Mostra tipos de nota, campos e baralhos de um .apkg "
-                               "(útil para escolher --notetype e --fields). Não gera arquivo.")
-    sub.add_parser("langs", help="lista os idiomas de saída disponíveis no DeepL")
+                               "(útil para escolher --notetype e --swap). Não gera arquivo.")
+    lg = sub.add_parser("langs", help="lista os idiomas de saída do serviço de tradução")
+    lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICO",
+                    help=f"serviço de tradução (padrão: {DEFAULT_PROVIDER})")
 
     opts = p.parse_args(argv)
 
@@ -1048,8 +1266,12 @@ def parse_args(argv=None):
         if opts.deck_method == "keep" and not opts.deck_names:
             t.error("--deck-method keep exige pelo menos um --deck-name")
     elif opts.command == "reverse":
-        if opts.fields and len(opts.fields.split(",")) != 2:
-            r.error("--fields espera exatamente dois campos: CAMPO1,CAMPO2")
+        seen = set()
+        for item in opts.swap or []:
+            parts = [x.strip().lower() for x in item.split("=")]
+            if len(parts) != 2 or not all(parts) or parts[0] == parts[1] or seen & set(parts):
+                r.error(f"--swap inválido: '{item}'. Use CAMPO1=CAMPO2, sem repetir campos")
+            seen.update(parts)
     return opts
 
 
@@ -1064,7 +1286,8 @@ def main(argv=None):
     elif opts.command == "info":
         InfoApp(opts).run()
     elif opts.command == "langs":
-        Ui.show_langs("Idiomas de saída disponíveis (código nome):", DeepLClient().target_langs)
+        Ui.show_langs("Idiomas de saída disponíveis (código nome):",
+                      choose_provider(opts).target_langs)
     else:
         AnkiTranslatorApp(opts).run()
 

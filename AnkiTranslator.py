@@ -1,4 +1,4 @@
-# pip install anki   (+ deepl, se for usar o serviço DeepL)
+# pip install anki (e deepl, se for usar o serviço DeepL)
 
 import argparse, json, os, re, sys, time, random, tempfile, collections, hashlib, threading
 from abc import ABC, abstractmethod
@@ -11,7 +11,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SAMPLE, MIN_RATIO = 10, 0.6
 DEFAULT_PROVIDER = "deepl"
 SEP = "::"
-
 
 # ======================================================================
 # Utilitários de console
@@ -83,9 +82,7 @@ class Ui:
         if tty and total:
             print()
 
-
 log = Ui.log
-
 
 class Heartbeat:
     """Para chamadas longas sem progresso interno (importar/exportar):
@@ -109,7 +106,6 @@ class Heartbeat:
         if exc_type is None:
             log(f"{self.msg}: concluído em {time.time() - self.t0:.1f}s")
         return False
-
 
 # ======================================================================
 # Texto: hash e proteção de tags
@@ -135,9 +131,7 @@ class TextTools:
     def plain(s):
         return re.sub(r"\[sound:[^\]]+\]|<[^>]+>|&\w+;|\{\{c\d+::|\}\}", "", s).strip()
 
-
 h = TextTools.h
-
 
 # ======================================================================
 # Provedores de tradução
@@ -147,17 +141,14 @@ class Language:
     code: str                                  # código na grafia do próprio provedor
     name: str
 
-
 @dataclass(frozen=True)
 class TranslationResult:
     text: str
     detected_source_lang: str = None           # idioma detectado (grafia do provedor)
 
-
 def lang_base(code):
     """'pt-BR' / 'PT_br' / 'PT' -> 'PT': compara idiomas ignorando região e maiúsculas."""
     return re.split(r"[-_]", (code or "").upper())[0]
-
 
 def load_secret(env_name, label):
     """Procura a chave na variável de ambiente <env_name>; se não achar, lê o arquivo .env
@@ -180,21 +171,17 @@ def load_secret(env_name, label):
                          f"{env_name}=sua-chave-aqui")
     return key
 
-
 PROVIDERS = {}                                 # nome -> classe; preenchido por @register_provider
-
 
 def register_provider(cls):
     PROVIDERS[cls.name] = cls
     return cls
-
 
 def make_provider(name):
     if name not in PROVIDERS:
         raise SystemExit(f"Serviço de tradução desconhecido: {name}. "
                          f"Disponíveis: {', '.join(sorted(PROVIDERS))}")
     return PROVIDERS[name]()
-
 
 class TranslationProvider(ABC):
     """Contrato de um serviço de tradução. O restante do programa só conhece esta interface.
@@ -285,7 +272,6 @@ class TranslationProvider(ABC):
         tag = f"_{self.name}" if self.cache_tag is None else self.cache_tag
         return SCRIPT_DIR / f"{stem}{tag}.json"
 
-
 @register_provider
 class DeepLProvider(TranslationProvider):
     name, label, key_env = "deepl", "DeepL", "DEEPL_KEY"
@@ -310,7 +296,6 @@ class DeepLProvider(TranslationProvider):
                                      tag_handling="html" if html else None)
         return [TranslationResult(r.text, r.detected_source_lang) for r in res]
 
-
 def choose_provider(opts):
     """Serviço de tradução: --provider, ou pergunta (se houver mais de um), ou o padrão."""
     name = getattr(opts, "provider", None)
@@ -321,7 +306,6 @@ def choose_provider(opts):
                         {k: PROVIDERS[n].label for k, n in keys.items()}, default)
         name = keys[key]
     return make_provider(name or DEFAULT_PROVIDER)
-
 
 # ======================================================================
 # Caches
@@ -394,7 +378,6 @@ class TranslationCache:
     def count(self):
         return sum(len(d) for t in self.trans.values() for d in t.values())
 
-
 class DeckNameCache:
     """deck_cache.json, separado do cache.json. Só a saída bruta do serviço é gravada;
     nomes digitados à mão nunca vão para o cache."""
@@ -423,7 +406,6 @@ class DeckNameCache:
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.path)
-
 
 # ======================================================================
 # Coleção do Anki
@@ -490,7 +472,6 @@ class AnkiCollection:
         if self.col:
             self.col.close()
 
-
 # ======================================================================
 # Detecção de idioma
 # ======================================================================
@@ -535,7 +516,6 @@ class FieldLanguageDetector:
             log("idiomas já detectados antes (cache): nenhum caractere gasto na detecção")
         return detected
 
-
 # ======================================================================
 # Tradução dos campos
 # ======================================================================
@@ -577,7 +557,6 @@ class FieldTranslator:
                     self.cache.put(T, L, src, out if ok else src)
                 self.cache.save()
                 log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
-
 
 # ======================================================================
 # Renomear baralhos
@@ -754,7 +733,6 @@ class DeckRenamer:
                 log(f" não consegui renomear '{old}': {e}")
         log(f"baralhos renomeados: {done}/{len(plan)}")
 
-
 # ======================================================================
 # Aplicação
 # ======================================================================
@@ -896,7 +874,6 @@ class AnkiTranslatorApp:
         if usage is not None:
             log(f"uso {self.client.label} ao final:", usage)
 
-
 # ======================================================================
 # Inverter cartões (comando separado, sem serviço de tradução)
 # ======================================================================
@@ -907,7 +884,6 @@ def ask_input(opts):
         raise SystemExit(f"Arquivo não encontrado: {src}")
     return src
 
-
 def ask_paths(opts, suffix="_out"):
     """Pergunta (ou lê das opções) o .apkg de entrada e o de saída."""
     src = ask_input(opts)
@@ -915,7 +891,6 @@ def ask_paths(opts, suffix="_out"):
     if out.suffix.lower() != ".apkg":
         out = out.with_name(out.name + ".apkg")
     return src, out
-
 
 class CardReverser:
     """Inverte frente e verso trocando, nos templates dos cartões, as referências a PARES de
@@ -925,11 +900,11 @@ class CardReverser:
     2+ campos (o tipo cloze, que tem um campo único, fica de fora)."""
 
     REF = re.compile(r"\{\{([#^/]?)((?:[^{}:]*:)*)([^{}:]+)\}\}")
-    STANDARD = 0                                          # no Anki, cloze é 1
+    STANDARD = 0                                         # no Anki, cloze é 1
 
     def __init__(self, anki, opts):
         self.anki, self.opts = anki, opts
-        self.counts = {}                                  # id do tipo de nota -> nº de notas
+        self.counts = {}                                 # id do tipo de nota -> nº de notas
 
     # ---- templates ----
     @classmethod
@@ -1009,7 +984,7 @@ class CardReverser:
         for nt in self.anki.notetypes():
             n = self.anki.note_count(nt["id"])
             if n == 0:
-                continue                                  # tipos padrão do Anki sem notas
+                continue                                 # tipos padrão do Anki sem notas
             self.counts[nt["id"]] = n
             if nt["type"] == self.STANDARD and len(nt["flds"]) >= 2:
                 out.append(nt)
@@ -1128,7 +1103,6 @@ class CardReverser:
             return 0
         return self.apply(plan)
 
-
 class ReverseApp:
     """Comando reverse: importar -> inverter cartões -> exportar. Não usa serviço de tradução."""
 
@@ -1147,7 +1121,6 @@ class ReverseApp:
         anki.close()
         log("pronto ->", out)
 
-
 class InfoApp:
     """Comando info: mostra tipos de nota, campos e baralhos do .apkg (não gera arquivo)."""
 
@@ -1161,7 +1134,7 @@ class InfoApp:
         for nt in sorted(anki.notetypes(), key=lambda nt: nt["name"].lower()):
             n = anki.note_count(nt["id"])
             if n == 0:
-                continue                                  # tipos padrão do Anki sem notas
+                continue                                 # tipos padrão do Anki sem notas
             kind = "cloze" if nt["type"] == 1 else "padrão"
             print(f" {nt['name']} [{kind}] - {n} notas, {len(nt['tmpls'])} template(s)")
             print(f"   campos: {', '.join(f['name'] for f in nt['flds'])}")
@@ -1177,15 +1150,14 @@ class InfoApp:
             print(f" {'  ' * (len(parts) - 1)}{parts[-1]}")
         anki.close()
 
-
 # ======================================================================
 # Linha de comando
 # ======================================================================
 COMMANDS = ("translate", "reverse", "info", "langs")
 MENU = {"1": ("translate", "Traduzir baralho (serviço de tradução)"),
         "2": ("reverse", "Inverter cartões (frente <-> verso)"),
-        "3": ("info", "Ver informações do baralho (tipos de nota, campos, baralhos)")}
-
+        "3": ("info", "Ver informações do baralho (tipos de nota, campos, baralhos)"),
+        "0": ("exit", "Sair")}
 
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1274,23 +1246,44 @@ def parse_args(argv=None):
             seen.update(parts)
     return opts
 
-
 def main(argv=None):
-    opts = parse_args(argv)
-    if opts.command is None:                             # modo interativo: menu de operações
-        key = Ui.choose("O que deseja fazer?", {k: v[1] for k, v in MENU.items()}, "1")
-        opts = parse_args([MENU[key][0]])
-    Ui.auto = getattr(opts, "yes", False)
-    if opts.command == "reverse":
-        ReverseApp(opts).run()
-    elif opts.command == "info":
-        InfoApp(opts).run()
-    elif opts.command == "langs":
-        Ui.show_langs("Idiomas de saída disponíveis (código nome):",
-                      choose_provider(opts).target_langs)
-    else:
-        AnkiTranslatorApp(opts).run()
+    while True:
+        try:
+            opts = parse_args(argv)
+            if getattr(opts, "command", None) is None:
+                options = {k: v[1] for k, v in MENU.items()}
+                key = Ui.choose("O que deseja fazer?", options, "1")
+                if key == "0":
+                    break
+                opts = parse_args([MENU[key][0]])
 
+            Ui.auto = getattr(opts, "yes", False)
+            
+            if opts.command == "reverse":
+                ReverseApp(opts).run()
+            elif opts.command == "info":
+                InfoApp(opts).run()
+            elif opts.command == "langs":
+                Ui.show_langs("Idiomas de saída disponíveis (código nome):",
+                              choose_provider(opts).target_langs)
+            elif opts.command != "exit":
+                AnkiTranslatorApp(opts).run()
+
+            if Ui.auto or not Ui.yes("\nDeseja voltar ao menu principal?", "s"):
+                break
+            argv = []  # Reseta os argumentos para forçar o menu interativo na próxima iteração
+
+        except SystemExit as e:
+            if str(e) and str(e) != "0":
+                print(f"\n[Aviso] {e}")
+            if Ui.auto or not Ui.yes("\nOperação interrompida. Deseja voltar ao menu principal?", "s"):
+                break
+            argv = []
+        except Exception as e:
+            print(f"\n[Erro Inesperado] {e}")
+            if Ui.auto or not Ui.yes("\nDeseja voltar ao menu principal?", "s"):
+                break
+            argv = []
 
 if __name__ == "__main__":
     main()

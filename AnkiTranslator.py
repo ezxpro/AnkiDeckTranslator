@@ -288,18 +288,19 @@ class AnkiCollection:
     """Importa o .apkg, expõe notas/campos, aplica traduções e exporta."""
 
     def __init__(self, src):
-        self.src = src
+        self.src = Path(src)
         self.col = None
         self.notes = []
         self.model_names = {}                                  # mid -> nome do modelo
         self.field_values = collections.defaultdict(list)      # (mid, campo) -> valores com texto
 
     def import_package(self):
-        log(f"importando {self.src} ({os.path.getsize(self.src) / 1e6:.1f} MB)")
-        self.col = Collection(os.path.join(tempfile.mkdtemp(), "collection.anki2"))
+        log(f"importando {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
+        db_path = Path(tempfile.mkdtemp()) / "collection.anki2"
+        self.col = Collection(str(db_path))
         with Heartbeat("importando baralho"):
             self.col.import_anki_package(ImportAnkiPackageRequest(
-                package_path=self.src, options=ImportAnkiPackageOptions()))
+                package_path=str(self.src), options=ImportAnkiPackageOptions()))
 
     def load_notes(self):
         for nid in Ui.progress(self.col.find_notes(""), "carregando notas"):
@@ -331,7 +332,7 @@ class AnkiCollection:
 
     def export(self, out_path):
         with Heartbeat("exportando"):
-            self.col.export_anki_package(out_path=out_path, options=ExportAnkiPackageOptions(
+            self.col.export_anki_package(out_path=str(out_path), options=ExportAnkiPackageOptions(
                 with_scheduling=False, with_deck_configs=False, with_media=True, legacy=False),
                 limit=None)
 
@@ -602,13 +603,12 @@ class AnkiTranslatorApp:
 
     # ---- perguntas ----
     def ask_paths(self):
-        src = os.path.abspath(Ui.ask("Arquivo de entrada", "italian.apkg"))
-        if not os.path.exists(src):
+        src = Path(Ui.ask("Arquivo de entrada", "italian.apkg")).resolve()
+        if not src.exists():
             raise SystemExit(f"Arquivo não encontrado: {src}")
-        base = os.path.splitext(os.path.basename(src))[0]
-        out = os.path.abspath(Ui.ask("Arquivo de saída", f"{base}_out.apkg"))
-        if not out.lower().endswith(".apkg"):
-            out += ".apkg"
+        out = Path(Ui.ask("Arquivo de saída", f"{src.stem}_out.apkg")).resolve()
+        if out.suffix.lower() != ".apkg":
+            out = out.with_name(out.name + ".apkg")
         return src, out
 
     def ask_target(self):

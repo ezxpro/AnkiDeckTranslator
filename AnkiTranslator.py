@@ -468,7 +468,7 @@ class DeckRenamer:
         """Devolve o conjunto de prefixos (tuplas de segmentos) cujo nome será traduzido."""
         paths = sorted({tuple(n.split(SEP)) for _, n in decks},
                        key=lambda p: tuple(s.lower() for s in p))
-        scope = {"main": "1", "all": "2"}.get(self.opts.rename_decks) or Ui.choose(
+        scope = {"main": "1", "all": "2"}.get(self.mode) or Ui.choose(
                           "Quais baralhos traduzir?",
                           {"1": "Só os baralhos principais (baralhos secundários mantêm o nome)",
                            "2": "Todos os baralhos, principais e secundários",
@@ -514,14 +514,19 @@ class DeckRenamer:
 
     def build_newseg(self, selected, method, src_lang):
         ordered = sorted(selected, key=lambda p: tuple(s.lower() for s in p))
+        overrides = self.opts.deck_names                 # --deck-name ATUAL=NOVO: sempre vence
         auto = {}
         if method in ("1", "3"):
-            auto = self.auto_names({p[-1] for p in selected}, src_lang)
+            auto = self.auto_names({p[-1] for p in selected if p[-1] not in overrides}, src_lang)
         newseg, memo = {}, {}
         for p in ordered:
             seg = p[-1]
-            if method == "1":
+            if seg in overrides:
+                new = overrides[seg]
+            elif method == "1":
                 new = auto.get(seg, seg)
+            elif method == "0":                          # só os nomes de --deck-name mudam
+                new = seg
             else:
                 suggestion = memo.get(seg) or (auto.get(seg, seg) if method == "3" else seg)
                 while True:
@@ -541,7 +546,8 @@ class DeckRenamer:
 
     # ---- fluxo principal ----
     def run(self):
-        mode = self.opts.rename_decks                    # None = perguntar; none/main/all
+        # None = perguntar; none/main/all. --deck-name sozinho implica escopo "all"
+        self.mode = mode = self.opts.rename_decks or ("all" if self.opts.deck_names else None)
         decks = self.anki.deck_list()
         if mode == "none" or not decks:
             return
@@ -552,8 +558,8 @@ class DeckRenamer:
             return
         src_lang = next(iter(self.picked)) if len(self.picked) == 1 else None
         # método fixo por opção; se o escopo veio por opção, o padrão é automático
-        fixed_method = {"auto": "1", "manual": "2", "review": "3"}.get(
-            self.opts.deck_method) or ("1" if mode else None)
+        fixed_method = {"auto": "1", "manual": "2", "review": "3", "keep": "0"}.get(
+            self.opts.deck_method) or ("0" if self.opts.deck_names else "1" if mode else None)
 
         while True:
             method = fixed_method or Ui.choose("Como alterar os nomes?",
@@ -744,11 +750,17 @@ class AnkiTranslatorApp:
 # ======================================================================
 # Inverter cartões (modo separado, sem DeepL)
 # ======================================================================
-def ask_paths(opts, suffix="_out"):
-    """Pergunta (ou lê das opções) o .apkg de entrada e o de saída."""
+def ask_input(opts):
+    """Pergunta (ou lê das opções) o .apkg de entrada."""
     src = Path(opts.input or Ui.ask("Arquivo de entrada", "italian.apkg")).resolve()
     if not src.exists():
         raise SystemExit(f"Arquivo não encontrado: {src}")
+    return src
+
+
+def ask_paths(opts, suffix="_out"):
+    """Pergunta (ou lê das opções) o .apkg de entrada e o de saída."""
+    src = ask_input(opts)
     out = Path(opts.output or Ui.ask("Arquivo de saída", f"{src.stem}{suffix}.apkg")).resolve()
     if out.suffix.lower() != ".apkg":
         out = out.with_name(out.name + ".apkg")
@@ -913,7 +925,7 @@ class CardReverser:
 
 
 class ReverseApp:
-    """Modo --reverse: importar -> inverter cartões -> exportar. Não usa o DeepL."""
+    """Comando reverse: importar -> inverter cartões -> exportar. Não usa o DeepL."""
 
     def __init__(self, opts):
         self.opts = opts
@@ -931,64 +943,130 @@ class ReverseApp:
         log("pronto ->", out)
 
 
+class InfoApp:
+    """Comando info: mostra tipos de nota, campos e baralhos do .apkg (não gera arquivo)."""
+
+    def __init__(self, opts):
+        self.opts = opts
+
+    def run(self):
+        anki = AnkiCollection(ask_input(self.opts))
+        anki.import_package()
+        print("\n=== Tipos de nota ===")
+        for nt in sorted(anki.notetypes(), key=lambda nt: nt["name"].lower()):
+            n = anki.note_count(nt["id"])
+            if n == 0:
+                continue                                  # tipos padrão do Anki sem notas
+            kind = "cloze" if nt["type"] == 1 else "padrão"
+            print(f" {nt['name']} [{kind}] - {n} notas, {len(nt['tmpls'])} template(s)")
+            print(f"   campos: {', '.join(f['name'] for f in nt['flds'])}")
+        print("\n=== Baralhos ===")
+        for _, name in sorted(anki.deck_list(), key=lambda d: d[1].lower()):
+            parts = name.split(SEP)
+            print(f" {'  ' * (len(parts) - 1)}{parts[-1]}")
+        anki.close()
+
+
+# ======================================================================
+# Linha de comando
+# ======================================================================
+COMMANDS = ("translate", "reverse", "info", "langs")
+MENU = {"1": ("translate", "Traduzir baralho (DeepL)"),
+        "2": ("reverse", "Inverter cartões (frente <-> verso)"),
+        "3": ("info", "Ver informações do baralho (tipos de nota, campos, baralhos)")}
+
+
 def parse_args(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help"):
+        argv.insert(0, "translate")                      # atalho: script deck.apkg -t PT-BR
+
     p = argparse.ArgumentParser(
-        description="Traduz um baralho .apkg do Anki com o DeepL. "
-                    "Sem nenhuma opção, roda em modo interativo (pergunta tudo).",
-        epilog="Qualquer opção omitida continua sendo perguntada, a menos que --yes seja usado.")
-    p.add_argument("input", nargs="?", metavar="ENTRADA",
-                   help="arquivo .apkg de entrada")
-    p.add_argument("-o", "--output", metavar="SAIDA",
-                   help="arquivo .apkg de saída (padrão: <entrada>_out.apkg)")
-    p.add_argument("-t", "--target", metavar="CODIGO",
-                   help="idioma de saída, ex.: PT-BR, EN-US (veja --list-langs)")
-    p.add_argument("-l", "--lang", metavar="CODIGOS",
+        prog=Path(sys.argv[0]).name,
+        description="Ferramentas para baralhos .apkg do Anki. Sem nenhum argumento, abre o "
+                    "modo interativo (menu). Use 'COMANDO -h' para ver as opções de cada comando.",
+        epilog="Em qualquer comando, o que não for informado por opção é perguntado, "
+               "a menos que -y/--yes seja usado.")
+    sub = p.add_subparsers(dest="command", metavar="COMANDO")
+
+    io = argparse.ArgumentParser(add_help=False)
+    io.add_argument("input", nargs="?", metavar="ENTRADA", help="arquivo .apkg de entrada")
+    run_opts = argparse.ArgumentParser(add_help=False)
+    run_opts.add_argument("-o", "--output", metavar="SAIDA", help="arquivo .apkg de saída")
+    run_opts.add_argument("-y", "--yes", action="store_true",
+                          help="não perguntar nada: usa os padrões de cada comando")
+
+    t = sub.add_parser(
+        "translate", parents=[io, run_opts],
+        help="traduz os campos (e, opcionalmente, os nomes dos baralhos) com o DeepL",
+        description="Traduz os campos de um baralho com o DeepL. Saída padrão: <entrada>_out.apkg. "
+                    "Com -y: PT-BR, todos os idiomas detectados, nomes de baralhos intactos.")
+    t.add_argument("-t", "--target", metavar="CODIGO",
+                   help="idioma de saída, ex.: PT-BR, EN-US (veja o comando 'langs')")
+    t.add_argument("-l", "--lang", metavar="CODIGOS",
                    help="idioma(s) de origem a traduzir, separados por vírgula "
                         "(ex.: IT,EN) ou 'all' para todos os detectados")
-    p.add_argument("-d", "--rename-decks", choices=["none", "main", "all"],
+    t.add_argument("-d", "--rename-decks", choices=["none", "main", "all"],
                    help="nomes de baralhos: none = não alterar, main = só os baralhos "
                         "principais, all = principais e secundários")
-    p.add_argument("-m", "--deck-method", choices=["auto", "manual", "review"],
-                   help="como renomear baralhos: auto (DeepL), manual ou review "
-                        "(sugestão do DeepL, um a um)")
-    p.add_argument("-y", "--yes", action="store_true",
-                   help="não perguntar nada: usa os padrões (PT-BR, todos os idiomas "
-                        "detectados, não renomeia baralhos, aplica sem confirmar)")
-    p.add_argument("--list-langs", action="store_true",
-                   help="lista os idiomas de saída disponíveis e sai")
-    p.add_argument("-r", "--reverse", action="store_true",
-                   help="modo separado: inverte frente e verso dos cartões (sem tradução, "
-                        "sem DeepL). Padrão de saída: <entrada>_reversed.apkg")
-    p.add_argument("--notetype", action="append", metavar="NOME",
-                   help="com --reverse: inverte só este tipo de nota (pode repetir)")
-    p.add_argument("--fields", metavar="CAMPO1,CAMPO2",
-                   help="com --reverse: campos a trocar (padrão: os dois primeiros de "
-                        "cada tipo de nota)")
+    t.add_argument("-m", "--deck-method", choices=["auto", "manual", "review", "keep"],
+                   help="como renomear baralhos: auto (DeepL), manual (você digita), "
+                        "review (sugestão do DeepL, um a um) ou keep (só os de --deck-name)")
+    t.add_argument("--deck-name", action="append", metavar="ATUAL=NOVO",
+                   help="renomeia o baralho de nome ATUAL (um nível, sem '::') para NOVO; "
+                        "pode repetir. Sem -d/-m, só estes são renomeados")
+
+    r = sub.add_parser(
+        "reverse", parents=[io, run_opts],
+        help="inverte frente e verso dos cartões (sem tradução, sem DeepL)",
+        description="Inverte frente e verso trocando os campos nos templates dos cartões. "
+                    "Saída padrão: <entrada>_reversed.apkg. Rodar de novo desfaz. "
+                    "Com -y: todos os tipos de nota (cloze não entra).")
+    r.add_argument("--notetype", action="append", metavar="NOME",
+                   help="inverte só este tipo de nota (pode repetir)")
+    r.add_argument("--fields", metavar="CAMPO1,CAMPO2",
+                   help="campos a trocar (padrão: inferidos do template de cada tipo de nota)")
+
+    sub.add_parser("info", parents=[io],
+                   help="mostra tipos de nota, campos e baralhos de um .apkg",
+                   description="Mostra tipos de nota, campos e baralhos de um .apkg "
+                               "(útil para escolher --notetype e --fields). Não gera arquivo.")
+    sub.add_parser("langs", help="lista os idiomas de saída disponíveis no DeepL")
+
     opts = p.parse_args(argv)
-    if opts.reverse:
-        clash = [f for f, v in (("--target", opts.target), ("--lang", opts.lang),
-                                ("--rename-decks", opts.rename_decks),
-                                ("--deck-method", opts.deck_method),
-                                ("--list-langs", opts.list_langs)) if v]
-        if clash:
-            p.error(f"--reverse não combina com opções de tradução: {', '.join(clash)}")
+
+    if opts.command == "translate":
+        opts.deck_names = {}
+        for item in opts.deck_name or []:
+            old, eq, new = item.partition("=")
+            old, new = old.strip(), new.strip()
+            if not eq or not old or not new or SEP in old or SEP in new:
+                t.error(f"--deck-name inválido: '{item}'. Use ATUAL=NOVO (um nível, sem '{SEP}')")
+            opts.deck_names[old] = new
+        if opts.deck_names and opts.rename_decks == "none":
+            t.error("--deck-name não combina com --rename-decks none")
+        if opts.deck_method == "keep" and not opts.deck_names:
+            t.error("--deck-method keep exige pelo menos um --deck-name")
+    elif opts.command == "reverse":
         if opts.fields and len(opts.fields.split(",")) != 2:
-            p.error("--fields espera exatamente dois campos: CAMPO1,CAMPO2")
-    elif opts.notetype or opts.fields:
-        p.error("--notetype e --fields só valem com --reverse")
+            r.error("--fields espera exatamente dois campos: CAMPO1,CAMPO2")
     return opts
 
 
 def main(argv=None):
     opts = parse_args(argv)
-    if opts.reverse:
+    if opts.command is None:                             # modo interativo: menu de operações
+        key = Ui.choose("O que deseja fazer?", {k: v[1] for k, v in MENU.items()}, "1")
+        opts = parse_args([MENU[key][0]])
+    Ui.auto = getattr(opts, "yes", False)
+    if opts.command == "reverse":
         ReverseApp(opts).run()
-        return
-    app = AnkiTranslatorApp(opts)
-    if opts.list_langs:
-        Ui.show_langs("Idiomas de saída disponíveis (código nome):", app.client.target_langs)
-        return
-    app.run()
+    elif opts.command == "info":
+        InfoApp(opts).run()
+    elif opts.command == "langs":
+        Ui.show_langs("Idiomas de saída disponíveis (código nome):", DeepLClient().target_langs)
+    else:
+        AnkiTranslatorApp(opts).run()
 
 
 if __name__ == "__main__":

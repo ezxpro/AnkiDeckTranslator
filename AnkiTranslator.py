@@ -1,6 +1,6 @@
 # pip install anki deepl
 
-import json, os, re, sys, time, random, tempfile, collections, hashlib, threading, deepl
+import argparse, json, os, re, sys, time, random, tempfile, collections, hashlib, threading, deepl
 from pathlib import Path
 from anki.collection import (Collection, ImportAnkiPackageRequest,
                              ImportAnkiPackageOptions, ExportAnkiPackageOptions)
@@ -14,7 +14,10 @@ SEP = "::"
 # Utilitários de console
 # ======================================================================
 class Ui:
-    """Entrada/saída de console: log, perguntas, menus e barra de progresso."""
+    """Entrada/saída de console: log, perguntas, menus e barra de progresso.
+    Com Ui.auto = True (opção --yes), nenhuma pergunta é feita: vale o valor padrão."""
+
+    auto = False
 
     @staticmethod
     def log(*a):
@@ -22,6 +25,8 @@ class Ui:
 
     @staticmethod
     def ask(msg, default):
+        if Ui.auto:
+            return default
         return input(f"{msg} [{default}]: ").strip().strip('"') or default
 
     @staticmethod
@@ -330,6 +335,12 @@ class AnkiCollection:
         return [(d.id, d.name) for d in self.col.decks.all_names_and_ids(
             skip_empty_default=True, include_filtered=False) if d.name != "Default"]
 
+    def notetypes(self):
+        return self.col.models.all()
+
+    def note_count(self, mid):
+        return len(self.col.find_notes(f"mid:{mid}"))
+
     def export(self, out_path):
         with Heartbeat("exportando"):
             self.col.export_anki_package(out_path=str(out_path), options=ExportAnkiPackageOptions(
@@ -432,7 +443,8 @@ class DeckRenamer:
     Baralhos principais são os de primeiro nível; baralhos secundários são os que
     ficam dentro de outro baralho (separados por '::')."""
 
-    def __init__(self, anki, client, target, picked, cache):
+    def __init__(self, anki, client, target, picked, cache, opts):
+        self.opts = opts
         self.anki, self.client = anki, client
         self.target, self.tbase = target, target.split("-")[0]
         self.picked = picked
@@ -456,7 +468,8 @@ class DeckRenamer:
         """Devolve o conjunto de prefixos (tuplas de segmentos) cujo nome será traduzido."""
         paths = sorted({tuple(n.split(SEP)) for _, n in decks},
                        key=lambda p: tuple(s.lower() for s in p))
-        scope = Ui.choose("Quais baralhos traduzir?",
+        scope = {"main": "1", "all": "2"}.get(self.opts.rename_decks) or Ui.choose(
+                          "Quais baralhos traduzir?",
                           {"1": "Só os baralhos principais (baralhos secundários mantêm o nome)",
                            "2": "Todos os baralhos, principais e secundários",
                            "3": "Escolher por número"}, "2")
@@ -528,16 +541,22 @@ class DeckRenamer:
 
     # ---- fluxo principal ----
     def run(self):
+        mode = self.opts.rename_decks                    # None = perguntar; none/main/all
         decks = self.anki.deck_list()
-        if not decks or not Ui.yes("\nTraduzir/alterar nomes de baralhos?", "n"):
+        if mode == "none" or not decks:
+            return
+        if mode is None and not Ui.yes("\nTraduzir/alterar nomes de baralhos?", "n"):
             return
         selected = self.pick_scope(decks)
         if not selected:
             return
         src_lang = next(iter(self.picked)) if len(self.picked) == 1 else None
+        # método fixo por opção; se o escopo veio por opção, o padrão é automático
+        fixed_method = {"auto": "1", "manual": "2", "review": "3"}.get(
+            self.opts.deck_method) or ("1" if mode else None)
 
         while True:
-            method = Ui.choose("Como alterar os nomes?",
+            method = fixed_method or Ui.choose("Como alterar os nomes?",
                                {"1": "Automático (DeepL)",
                                 "2": "Manual (você digita; Enter mantém o atual)",
                                 "3": "Revisar um a um (sugestão do DeepL; Enter aceita)"}, "1")
@@ -560,8 +579,8 @@ class DeckRenamer:
                 print("\nConflito: mais de um baralho ficaria com o mesmo nome:")
                 for k in dups:
                     print(f" {k}")
-                if not Ui.yes("Tentar de novo?", "s"):
-                    return
+                if fixed_method or not Ui.yes("Tentar de novo?", "s"):
+                    return                               # método fixo daria o mesmo conflito
                 continue
             if Ui.yes("\nAplicar?", "s"):
                 break
@@ -591,7 +610,9 @@ class DeckRenamer:
 class AnkiTranslatorApp:
     """Orquestra o fluxo: perguntas -> importar -> detectar -> traduzir -> renomear -> exportar."""
 
-    def __init__(self):
+    def __init__(self, opts):
+        self.opts = opts
+        Ui.auto = opts.yes
         self.client = DeepLClient()
         log("uso atual DeepL:", self.client.usage())
         self.cache = TranslationCache(SCRIPT_DIR / "cache.json", self.client.target_codes)
@@ -603,22 +624,24 @@ class AnkiTranslatorApp:
 
     # ---- perguntas ----
     def ask_paths(self):
-        src = Path(Ui.ask("Arquivo de entrada", "italian.apkg")).resolve()
-        if not src.exists():
-            raise SystemExit(f"Arquivo não encontrado: {src}")
-        out = Path(Ui.ask("Arquivo de saída", f"{src.stem}_out.apkg")).resolve()
-        if out.suffix.lower() != ".apkg":
-            out = out.with_name(out.name + ".apkg")
-        return src, out
+        return ask_paths(self.opts)
 
     def ask_target(self):
-        Ui.show_langs("Idiomas de saída disponíveis (código nome):", self.client.target_langs)
-        while True:
-            target = Ui.ask("Idioma de saída (Enter = português do Brasil, "
-                            "ou digite um código da lista acima)", "PT-BR").upper()
-            if target in self.client.target_codes:
-                break
-            print(f" '{target}' não é um código válido. Use um dos códigos da lista acima.")
+        if self.opts.target:
+            target = self.opts.target.strip().upper()
+            if target not in self.client.target_codes:
+                raise SystemExit(f"Idioma de saída inválido: {target}. "
+                                 f"Use --list-langs para ver os códigos.")
+        else:
+            if not Ui.auto:
+                Ui.show_langs("Idiomas de saída disponíveis (código nome):",
+                              self.client.target_langs)
+            while True:
+                target = Ui.ask("Idioma de saída (Enter = português do Brasil, "
+                                "ou digite um código da lista acima)", "PT-BR").upper()
+                if target in self.client.target_codes:
+                    break
+                print(f" '{target}' não é um código válido. Use um dos códigos da lista acima.")
         self.target, self.tbase = target, target.split("-")[0]
 
     def show_detected(self, detected):
@@ -630,6 +653,18 @@ class AnkiTranslatorApp:
                 cur = mid
             label = lang if ratio >= MIN_RATIO else f"{lang}? (incerto)"
             print(f" {f}: {label} ({ratio:.0%}) ex.: {ex}")
+
+    def _languages_from_args(self, valid):
+        raw = (self.opts.lang or "all").upper()
+        if raw == "ALL":
+            return set(valid)
+        picked = {t for t in re.split(r"[,\s;]+", raw) if t}
+        bad = sorted(picked - set(valid))
+        if bad:
+            self.anki.close()
+            raise SystemExit(f"Idioma(s) não detectado(s) nos campos: {', '.join(bad)}. "
+                             f"Detectados: {', '.join(valid)}")
+        return picked
 
     def ask_languages(self, detected):
         counts = collections.Counter(
@@ -650,6 +685,8 @@ class AnkiTranslatorApp:
                   f"campos 'incertos' também)")
 
         valid = dict(options)
+        if self.opts.lang or Ui.auto:                    # sem pergunta: --lang, ou todos com --yes
+            return self._languages_from_args(valid)
         default = "1" if len(options) == 1 else ""
         while True:
             prompt = ("\nTraduzir qual idioma? número ou código "
@@ -695,7 +732,8 @@ class AnkiTranslatorApp:
         FieldTranslator(self.client, self.cache).translate(chosen, self.anki.field_values)
         self.anki.apply_translations(chosen, self.cache)
 
-        DeckRenamer(self.anki, self.client, self.target, picked, self.deck_cache).run()
+        DeckRenamer(self.anki, self.client, self.target, picked, self.deck_cache,
+                    self.opts).run()
 
         self.anki.export(out)
         self.anki.close()
@@ -703,5 +741,255 @@ class AnkiTranslatorApp:
         log("uso DeepL ao final:", self.client.usage())
 
 
+# ======================================================================
+# Inverter cartões (modo separado, sem DeepL)
+# ======================================================================
+def ask_paths(opts, suffix="_out"):
+    """Pergunta (ou lê das opções) o .apkg de entrada e o de saída."""
+    src = Path(opts.input or Ui.ask("Arquivo de entrada", "italian.apkg")).resolve()
+    if not src.exists():
+        raise SystemExit(f"Arquivo não encontrado: {src}")
+    out = Path(opts.output or Ui.ask("Arquivo de saída", f"{src.stem}{suffix}.apkg")).resolve()
+    if out.suffix.lower() != ".apkg":
+        out = out.with_name(out.name + ".apkg")
+    return src, out
+
+
+class CardReverser:
+    """Inverte frente e verso trocando, nos templates dos cartões, as referências aos dois
+    campos escolhidos ({{Frente}} <-> {{Verso}}). O conteúdo das notas não muda e a operação
+    é reversível: rodar de novo desfaz. Só entram tipos de nota padrão com 2+ campos
+    (o tipo cloze, que tem um campo único, fica de fora)."""
+
+    REF = re.compile(r"\{\{([#^/]?)((?:[^{}:]*:)*)([^{}:]+)\}\}")
+    STANDARD = 0                                          # no Anki, cloze é 1
+
+    def __init__(self, anki, opts):
+        self.anki, self.opts = anki, opts
+        self.counts = {}                                  # id do tipo de nota -> nº de notas
+
+    @classmethod
+    def swap_refs(cls, tmpl, a, b):
+        """Troca as referências aos campos a e b num template (numa única passada),
+        preservando filtros e seções: {{type:A}}, {{hint:A}}, {{#A}}...{{/A}}."""
+        def sub(m):
+            prefix, filters, name = m.groups()
+            n = name.strip()
+            if n == a:
+                name = b
+            elif n == b:
+                name = a
+            else:
+                return m.group(0)
+            return "{{" + prefix + filters + name + "}}"
+        return cls.REF.sub(sub, tmpl)
+
+    def eligible(self):
+        out, skipped = [], 0
+        for nt in self.anki.notetypes():
+            n = self.anki.note_count(nt["id"])
+            if n == 0:
+                continue                                  # tipos padrão do Anki sem notas
+            self.counts[nt["id"]] = n
+            if nt["type"] == self.STANDARD and len(nt["flds"]) >= 2:
+                out.append(nt)
+            else:
+                skipped += 1
+        if skipped:
+            log(f"tipos de nota ignorados (cloze ou com menos de 2 campos): {skipped}")
+        return sorted(out, key=lambda nt: nt["name"].lower())
+
+    def pick_notetypes(self, cands):
+        if self.opts.notetype:
+            wanted = {n.lower(): n for n in self.opts.notetype}
+            chosen = [nt for nt in cands if nt["name"].lower() in wanted]
+            missing = set(wanted) - {nt["name"].lower() for nt in chosen}
+            if missing:
+                self.anki.close()
+                raise SystemExit(
+                    f"Tipo(s) de nota não encontrado(s): {', '.join(wanted[m] for m in sorted(missing))}. "
+                    f"Disponíveis: {', '.join(nt['name'] for nt in cands)}")
+            return chosen
+        if Ui.auto:
+            return cands
+        print("\n=== Tipos de nota que podem ser invertidos ===")
+        for i, nt in enumerate(cands, 1):
+            names = ", ".join(f["name"] for f in nt["flds"])
+            print(f" {i}) {nt['name']} ({self.counts[nt['id']]} notas) - campos: {names}")
+        while True:
+            raw = Ui.ask("\nQuais inverter? (todos, ou números ex.: 1,3; n = cancelar)", "todos")
+            if raw.lower() in ("n", "nao", "não"):
+                return []
+            if raw.lower() in ("todos", "all", "t"):
+                return cands
+            nums = DeckRenamer.parse_numbers(raw, len(cands))
+            if nums:
+                return [cands[k - 1] for k in sorted(nums)]
+            print(" Seleção inválida.")
+
+    @staticmethod
+    def parse_pair(raw, names):
+        """'A,B' -> (A, B) com a grafia real dos campos, ou None se inválido."""
+        parts = [p.strip().lower() for p in raw.split(",")]
+        lower = {n.lower(): n for n in names}
+        if len(parts) == 2 and parts[0] != parts[1] and all(p in lower for p in parts):
+            return lower[parts[0]], lower[parts[1]]
+        return None
+
+    @classmethod
+    def default_pair(cls, nt, names):
+        """Frente = primeiro campo do template da pergunta; verso = primeiro campo que só
+        aparece na resposta. Se não der para inferir, usa os dois primeiros campos."""
+        def refs(tmpl):
+            seen = []
+            for m in cls.REF.finditer(tmpl):
+                n = m.group(3).strip()
+                if n in names and n not in seen:
+                    seen.append(n)
+            return seen
+        t = nt["tmpls"][0]
+        front = refs(t["qfmt"])
+        back = [n for n in refs(t["afmt"]) if n not in front]
+        if front and back:
+            return front[0], back[0]
+        return names[0], names[1]
+
+    def pick_fields(self, nt):
+        names = [f["name"] for f in nt["flds"]]
+        if self.opts.fields:
+            pair = self.parse_pair(self.opts.fields, names)
+            if not pair:
+                log(f" {nt['name']}: não tem os campos {self.opts.fields}; ignorado")
+            return pair
+        pair = self.default_pair(nt, names)
+        if len(names) > 2 and not Ui.auto:
+            while True:
+                raw = Ui.ask(f" {nt['name']} - campos a trocar ({', '.join(names)})",
+                             ",".join(pair))
+                pair = self.parse_pair(raw, names)
+                if pair:
+                    break
+                print(" Informe dois campos existentes separados por vírgula.")
+        return pair
+
+    def apply(self, plan):
+        models = self.anki.col.models
+        save = getattr(models, "update_dict", None) or models.save
+        done = 0
+        for nt, a, b in plan:
+            changed = False
+            for t in nt["tmpls"]:
+                q, ans = self.swap_refs(t["qfmt"], a, b), self.swap_refs(t["afmt"], a, b)
+                changed |= (q != t["qfmt"] or ans != t["afmt"])
+                t["qfmt"], t["afmt"] = q, ans
+            if not changed:
+                log(f" {nt['name']}: nenhum template usa {a} ou {b}; ignorado")
+                continue
+            save(nt)
+            done += 1
+        log(f"tipos de nota invertidos: {done}/{len(plan)}")
+        return done
+
+    def run(self):
+        """Devolve quantos tipos de nota foram invertidos."""
+        cands = self.eligible()
+        if not cands:
+            log("nenhum tipo de nota com frente e verso para inverter")
+            return 0
+        plan = []
+        for nt in self.pick_notetypes(cands):
+            pair = self.pick_fields(nt)
+            if pair:
+                plan.append((nt, *pair))
+        if not plan:
+            return 0
+        print("\n=== Inversão de cartões ===")
+        for nt, a, b in plan:
+            print(f" {nt['name']}: {a} <-> {b} "
+                  f"({self.counts[nt['id']]} notas, {len(nt['tmpls'])} template(s))")
+        if not Ui.yes("\nAplicar?", "s"):
+            return 0
+        return self.apply(plan)
+
+
+class ReverseApp:
+    """Modo --reverse: importar -> inverter cartões -> exportar. Não usa o DeepL."""
+
+    def __init__(self, opts):
+        self.opts = opts
+        Ui.auto = opts.yes
+
+    def run(self):
+        src, out = ask_paths(self.opts, suffix="_reversed")
+        anki = AnkiCollection(src)
+        anki.import_package()
+        if not CardReverser(anki, self.opts).run():
+            anki.close()
+            raise SystemExit("Nada foi invertido; nenhum arquivo gerado.")
+        anki.export(out)
+        anki.close()
+        log("pronto ->", out)
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(
+        description="Traduz um baralho .apkg do Anki com o DeepL. "
+                    "Sem nenhuma opção, roda em modo interativo (pergunta tudo).",
+        epilog="Qualquer opção omitida continua sendo perguntada, a menos que --yes seja usado.")
+    p.add_argument("input", nargs="?", metavar="ENTRADA",
+                   help="arquivo .apkg de entrada")
+    p.add_argument("-o", "--output", metavar="SAIDA",
+                   help="arquivo .apkg de saída (padrão: <entrada>_out.apkg)")
+    p.add_argument("-t", "--target", metavar="CODIGO",
+                   help="idioma de saída, ex.: PT-BR, EN-US (veja --list-langs)")
+    p.add_argument("-l", "--lang", metavar="CODIGOS",
+                   help="idioma(s) de origem a traduzir, separados por vírgula "
+                        "(ex.: IT,EN) ou 'all' para todos os detectados")
+    p.add_argument("-d", "--rename-decks", choices=["none", "main", "all"],
+                   help="nomes de baralhos: none = não alterar, main = só os baralhos "
+                        "principais, all = principais e secundários")
+    p.add_argument("-m", "--deck-method", choices=["auto", "manual", "review"],
+                   help="como renomear baralhos: auto (DeepL), manual ou review "
+                        "(sugestão do DeepL, um a um)")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="não perguntar nada: usa os padrões (PT-BR, todos os idiomas "
+                        "detectados, não renomeia baralhos, aplica sem confirmar)")
+    p.add_argument("--list-langs", action="store_true",
+                   help="lista os idiomas de saída disponíveis e sai")
+    p.add_argument("-r", "--reverse", action="store_true",
+                   help="modo separado: inverte frente e verso dos cartões (sem tradução, "
+                        "sem DeepL). Padrão de saída: <entrada>_reversed.apkg")
+    p.add_argument("--notetype", action="append", metavar="NOME",
+                   help="com --reverse: inverte só este tipo de nota (pode repetir)")
+    p.add_argument("--fields", metavar="CAMPO1,CAMPO2",
+                   help="com --reverse: campos a trocar (padrão: os dois primeiros de "
+                        "cada tipo de nota)")
+    opts = p.parse_args(argv)
+    if opts.reverse:
+        clash = [f for f, v in (("--target", opts.target), ("--lang", opts.lang),
+                                ("--rename-decks", opts.rename_decks),
+                                ("--deck-method", opts.deck_method),
+                                ("--list-langs", opts.list_langs)) if v]
+        if clash:
+            p.error(f"--reverse não combina com opções de tradução: {', '.join(clash)}")
+        if opts.fields and len(opts.fields.split(",")) != 2:
+            p.error("--fields espera exatamente dois campos: CAMPO1,CAMPO2")
+    elif opts.notetype or opts.fields:
+        p.error("--notetype e --fields só valem com --reverse")
+    return opts
+
+
+def main(argv=None):
+    opts = parse_args(argv)
+    if opts.reverse:
+        ReverseApp(opts).run()
+        return
+    app = AnkiTranslatorApp(opts)
+    if opts.list_langs:
+        Ui.show_langs("Idiomas de saída disponíveis (código nome):", app.client.target_langs)
+        return
+    app.run()
+
+
 if __name__ == "__main__":
-    AnkiTranslatorApp().run()
+    main()

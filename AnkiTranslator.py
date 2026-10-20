@@ -1,8 +1,9 @@
 # pip install anki deepl
-import json, os, re, time, random, tempfile, collections, deepl
+
+import json, os, re, sys, time, random, tempfile, collections, hashlib, threading, deepl
 from pathlib import Path
 from anki.collection import (Collection, ImportAnkiPackageRequest,
-    ImportAnkiPackageOptions, ExportAnkiPackageOptions)
+                             ImportAnkiPackageOptions, ExportAnkiPackageOptions)
 
 def load_key():
     """Procura DEEPL_KEY na variável de ambiente; se não achar, lê o arquivo .env
@@ -30,6 +31,7 @@ BATCH, SAMPLE, MIN_RATIO = 40, 10, 0.6
 CACHE_FILE = Path(__file__).resolve().parent / "cache.json"   # sempre ao lado do script
 
 def log(*a): print(time.strftime("%H:%M:%S"), *a, flush=True)
+
 def ask(msg, default):
     return input(f"{msg} [{default}]: ").strip().strip('"') or default
 
@@ -38,13 +40,57 @@ def show_langs(title, langs):
     half = (len(items) + 1) // 2
     print(f"\n{title}")
     for i in range(half):
-        left = f"  {items[i].code:<8}{items[i].name}"
+        left = f" {items[i].code:<8}{items[i].name}"
         right = ""
         if i + half < len(items):
             r = items[i + half]
             right = f"{r.code:<8}{r.name}"
         print(f"{left:<40}{right}")
     print()
+
+def h(s):
+    """Hash curto e estável de um texto: o cache guarda isso no lugar do texto original."""
+    return hashlib.blake2b(s.encode("utf-8"), digest_size=12).hexdigest()
+
+def progress(items, label, total=None):
+    """Percorre 'items' mostrando andamento. Em terminal atualiza a mesma linha;
+    com saída redirecionada (log/arquivo) imprime a cada 10%."""
+    total = len(items) if total is None else total
+    tty = sys.stdout.isatty()
+    last, nxt = 0.0, 0.1
+    for i, x in enumerate(items, 1):
+        yield x
+        if tty:
+            now = time.time()
+            if now - last >= 0.2 or i == total:
+                print(f"\r{time.strftime('%H:%M:%S')} {label}: {i}/{total} ({i * 100 // total}%)",
+                      end="", flush=True)
+                last = now
+        elif i / total >= nxt or i == total:
+            log(f"{label}: {i}/{total} ({i * 100 // total}%)")
+            while nxt <= i / total:
+                nxt += 0.1
+    if tty and total:
+        print()
+
+class Heartbeat:
+    """Para chamadas longas sem progresso interno (importar/exportar):
+    mostra 'ainda trabalhando... Ns' a cada poucos segundos."""
+    def __init__(self, msg, every=5):
+        self.msg, self.every = msg, every
+    def __enter__(self):
+        self.t0, self.stop = time.time(), threading.Event()
+        log(self.msg + "...")
+        threading.Thread(target=self._run, daemon=True).start()
+        return self
+    def _run(self):
+        while not self.stop.wait(self.every):
+            log(f"  {self.msg}... {int(time.time() - self.t0)}s")
+    def __exit__(self, exc_type, *rest):
+        self.stop.set()
+        if exc_type is None:
+            log(f"{self.msg}: concluído em {time.time() - self.t0:.1f}s")
+        return False
 
 # ---- DeepL ----
 tr = deepl.Translator(KEY)
@@ -53,7 +99,10 @@ tlangs = tr.get_target_languages()
 tcodes = {l.code for l in tlangs}
 src_names = {l.code: l.name for l in tr.get_source_languages()}
 
-# ---- cache: traduções (por idioma de saída + texto) e idiomas detectados (por arquivo) ----
+# ---- cache (v3) ----
+# trans: {SAIDA: {ORIGEM: {hash(texto): tradução}}}   ("?" = origem desconhecida, vindo da v2)
+# lang:  {hash(texto simples): idioma detectado}
+# Só hashes vão para o arquivo: o texto original do baralho não é guardado.
 def load_cache():
     data = {}
     if CACHE_FILE.exists():
@@ -64,7 +113,10 @@ def load_cache():
             CACHE_FILE.replace(bak)
             log(f"cache.json estava ilegível; guardei uma cópia em {bak.name} e comecei um novo")
             data = {}
-    if data and data.get("version") != 2:   # formato antigo: chaves "SAIDA|ORIGEM|texto"
+    if not isinstance(data, dict):
+        data = {}
+    ver = data.get("version")
+    if data and ver not in (2, 3):          # formato antigo: chaves "SAIDA|ORIGEM|texto"
         old, data, migrated = data, {}, 0
         data["trans"] = {}
         for k, v in old.items():
@@ -73,18 +125,33 @@ def load_cache():
                 data["trans"].setdefault(parts[0], {})[parts[2]] = v
                 migrated += 1
         log(f"cache antigo convertido: {migrated} traduções aproveitadas")
-    data["version"] = 2
-    data.setdefault("trans", {})
-    data.setdefault("detect", {})
-    return data
+        ver = 2
+    if ver == 2:                            # v2: texto original como chave, origem desconhecida
+        trans, migrated = {}, 0
+        for t_code, d in data.get("trans", {}).items():
+            trans[t_code] = {"?": {h(t): out for t, out in d.items()}}
+            migrated += len(d)
+        data = {"trans": trans}
+        log(f"cache v2 convertido para hashes: {migrated} traduções aproveitadas "
+            f"(origem desconhecida, ficam em '?')")
+    return {"version": 3, "trans": data.get("trans", {}), "lang": data.get("lang", {})}
 
 def save_cache():
-    tmp = CACHE_FILE.with_name(CACHE_FILE.name + ".tmp")   # grava num temporário e troca:
-    tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(CACHE_FILE)                                # fechar o programa não corrompe
+    tmp = CACHE_FILE.with_name(CACHE_FILE.name + ".tmp")     # grava num temporário e troca:
+    tmp.write_text(json.dumps(cache, ensure_ascii=False, separators=(",", ":")),
+                   encoding="utf-8")
+    tmp.replace(CACHE_FILE)                                  # fechar o programa não corrompe
+
+def cached_tr(T, L, v):
+    """Tradução em cache de v (saída T, origem L), ou None. O bucket '?' (cache antigo)
+    só é consultado se o bucket exato não tiver o texto; nada novo é gravado nele."""
+    tt, k = cache["trans"].get(T, {}), h(v)
+    r = tt.get(L, {}).get(k)
+    return r if r is not None else tt.get("?", {}).get(k)
 
 cache = load_cache()
-log(f"cache: {sum(len(t) for t in cache['trans'].values())} traduções guardadas em {CACHE_FILE}")
+log(f"cache: {sum(len(d) for t in cache['trans'].values() for d in t.values())} traduções "
+    f"e {len(cache['lang'])} idiomas de texto guardados em {CACHE_FILE}")
 
 # ---- perguntas ----
 SRC = os.path.abspath(ask("Arquivo de entrada", "italian.apkg"))
@@ -95,13 +162,13 @@ OUT = os.path.abspath(ask("Arquivo de saída", f"{base}_out.apkg"))
 if not OUT.lower().endswith(".apkg"):
     OUT += ".apkg"
 
-show_langs("Idiomas de saída disponíveis (código  nome):", tlangs)
+show_langs("Idiomas de saída disponíveis (código nome):", tlangs)
 while True:
     TARGET = ask("Idioma de saída (Enter = português do Brasil, ou digite um código da lista acima)",
                  "PT-BR").upper()
     if TARGET in tcodes:
         break
-    print(f"  '{TARGET}' não é um código válido. Use um dos códigos da lista acima.")
+    print(f" '{TARGET}' não é um código válido. Use um dos códigos da lista acima.")
 TBASE = TARGET.split("-")[0]
 
 # ---- proteção de tags ----
@@ -112,41 +179,55 @@ def unmask(t): return WRAP.sub(r"\1", t)
 def plain(s):  return re.sub(r"\[sound:[^\]]+\]|<[^>]+>|&\w+;|\{\{c\d+::|\}\}", "", s).strip()
 
 # ---- importa o baralho ----
-log("importando", SRC)
+log(f"importando {SRC} ({os.path.getsize(SRC) / 1e6:.1f} MB)")
 col = Collection(os.path.join(tempfile.mkdtemp(), "collection.anki2"))
-col.import_anki_package(ImportAnkiPackageRequest(
-    package_path=SRC, options=ImportAnkiPackageOptions()))
-notes = [col.get_note(n) for n in col.find_notes("")]
-log("notas:", len(notes))
+with Heartbeat("importando baralho"):
+    col.import_anki_package(ImportAnkiPackageRequest(
+        package_path=SRC, options=ImportAnkiPackageOptions()))
 
+ids = col.find_notes("")
+notes = []
 names = {}
-vals = collections.defaultdict(list)   # (mid, campo) -> valores com texto
-for n in notes:
+vals = collections.defaultdict(list)                 # (mid, campo) -> valores com texto
+for nid in progress(ids, "carregando notas"):
+    n = col.get_note(nid)
+    notes.append(n)
     if n.mid not in names:
         names[n.mid] = n.note_type()["name"]
     for f, v in n.items():
         if len(plain(v)) >= 3:
             vals[(n.mid, f)].append(v)
+log("notas:", len(notes))
 
 # ---- 1) detecta o idioma de cada campo ----
-fp = f"{os.path.basename(SRC)}|{os.path.getsize(SRC)}|{int(os.path.getmtime(SRC))}"   # identifica o arquivo
-det_cache = cache["detect"].setdefault(fp, {})
-detected = {}   # (mid, campo) -> (idioma, proporção, exemplo)
-novos = 0
+# Cache por texto (hash do texto simples): textos já detectados em execuções anteriores
+# não são enviados de novo, mesmo que o .apkg tenha mudado. A amostra de cada campo
+# prioriza textos já conhecidos, então só textos realmente novos gastam caracteres.
+lang_cache = cache["lang"]
+detected = {}                                        # (mid, campo) -> (idioma, proporção, exemplo)
+sent = reused = 0
 for (mid, f), vs in vals.items():
-    key = f"{names[mid]}|{f}"
-    if key not in det_cache:
-        if novos == 0:
+    uniq = list(dict.fromkeys(plain(v) for v in vs))
+    known = [p for p in uniq if h(p) in lang_cache]
+    unknown = [p for p in uniq if h(p) not in lang_cache]
+    pick = random.sample(known, min(SAMPLE, len(known)))
+    fresh = random.sample(unknown, min(SAMPLE - len(pick), len(unknown)))
+    if fresh:
+        if sent == 0:
             log(f"detectando o idioma dos campos (amostra de até {SAMPLE} textos cada)...")
-        sample = random.sample(vs, min(SAMPLE, len(vs)))
-        res = tr.translate_text([plain(s) for s in sample], target_lang=TARGET)
-        lang, cnt = collections.Counter(r.detected_source_lang for r in res).most_common(1)[0]
-        ex = re.sub(r"\s+", " ", plain(sample[0]))[:45]
-        det_cache[key] = [lang, cnt / len(res), ex]
-        novos += 1
-    detected[(mid, f)] = tuple(det_cache[key])
-if novos:
+        res = tr.translate_text(fresh, target_lang=TARGET)
+        for p, r in zip(fresh, res):
+            lang_cache[h(p)] = r.detected_source_lang
+        sent += len(fresh)
+    reused += len(pick)
+    sample = pick + fresh
+    lang, cnt = collections.Counter(lang_cache[h(p)] for p in sample).most_common(1)[0]
+    ex = re.sub(r"\s+", " ", sample[0])[:45]
+    detected[(mid, f)] = (lang, cnt / len(sample), ex)
+
+if sent:
     save_cache()
+    log(f"detecção de idioma: {sent} textos enviados, {reused} reaproveitados do cache")
 else:
     log("idiomas já detectados antes (cache): nenhum caractere gasto na detecção")
 
@@ -158,7 +239,7 @@ for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0]
         print(f"\n{names[mid]}")
         cur = mid
     label = lang if ratio >= MIN_RATIO else f"{lang}? (incerto)"
-    print(f"  {f}: {label} ({ratio:.0%})   ex.: {ex}")
+    print(f" {f}: {label} ({ratio:.0%}) ex.: {ex}")
 
 counts = collections.Counter(
     lang for (lang, ratio, _) in detected.values() if ratio >= MIN_RATIO and lang != TBASE)
@@ -171,9 +252,9 @@ if not options:
 
 print(f"\n=== Idiomas que podem ser traduzidos para {TARGET} ===")
 for i, (code, c) in enumerate(options, 1):
-    print(f"  {i}) {code} - {src_names.get(code, code)} ({c} campos)")
+    print(f" {i}) {code} - {src_names.get(code, code)} ({c} campos)")
 if ja_no_alvo:
-    print(f"  ({ja_no_alvo} campos já estão em {TBASE} e serão mantidos; campos 'incertos' também)")
+    print(f" ({ja_no_alvo} campos já estão em {TBASE} e serão mantidos; campos 'incertos' também)")
 
 # ---- 3) escolhe qual(is) idioma(s) traduzir ----
 valid = dict(options)
@@ -196,25 +277,26 @@ while True:
             bad.append(tok)
     if picked and not bad:
         break
-    print(f"  Opção inválida: {', '.join(bad) or raw}. Escolha entre os números/códigos listados.")
+    print(f" Opção inválida: {', '.join(bad) or raw}. Escolha entre os números/códigos listados.")
 
 chosen = {k: (lang, TARGET) for k, (lang, ratio, _) in detected.items()
           if lang in picked and ratio >= MIN_RATIO}
 log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
 
-# ---- traduz (cache por idioma de saída + texto) ----
+# ---- traduz (cache por idioma de saída + idioma de origem + hash do texto) ----
 trans = cache["trans"]
-todo = collections.defaultdict(list)   # (origem, saída) -> textos
-queued, hits = set(), 0
+todo = collections.defaultdict(list)                 # (origem, saída) -> textos
+queued, cached = set(), set()
 for (mid, f), (L, T) in chosen.items():
-    tc = trans.get(T, {})
     for v in vals[(mid, f)]:
-        if v in tc:
-            hits += 1
-        elif (T, v) not in queued:
-            queued.add((T, v))
+        if cached_tr(T, L, v) is not None:
+            cached.add((L, T, v))
+        elif (L, T, v) not in queued:
+            queued.add((L, T, v))
             todo[(L, T)].append(v)
-log(f"a traduzir: {len(queued)} (já estavam no cache: {hits})")
+chars = sum(len(mask(v)) for (_, _, v) in queued)
+log(f"a traduzir: {len(queued)} textos (~{chars} caracteres); "
+    f"já estavam no cache (sem custo): {len(cached)}")
 
 for (L, T), texts in todo.items():
     texts = sorted(texts)
@@ -232,24 +314,24 @@ for (L, T), texts in todo.items():
         for src, r in zip(chunk, res):
             out = unmask(r.text)
             ok = PROT.findall(out) == PROT.findall(src)
-            if not ok: log("  tag danificada, mantido original:", plain(src)[:50])
-            trans.setdefault(T, {})[src] = out if ok else src
+            if not ok: log(" tag danificada, mantido original:", plain(src)[:50])
+            trans.setdefault(T, {}).setdefault(L, {})[h(src)] = out if ok else src
         save_cache()
-        log(f"  [{L}->{T}] {min(i + BATCH, len(texts))}/{len(texts)}")
+        log(f" [{L}->{T}] {min(i + BATCH, len(texts))}/{len(texts)}")
 
-
-# ---- aplica e exporta ----
-for n in notes:
+# ---- aplica nas notas ----
+for n in progress(notes, "aplicando traduções"):
     mudou = False
     for f, v in n.items():
         c = chosen.get((n.mid, f))
         if c:
-            new = trans.get(c[1], {}).get(v, v)
-            if new != v:
+            new = cached_tr(c[1], c[0], v)
+            if new is not None and new != v:
                 n[f] = new; mudou = True
     if mudou: col.update_note(n)
-# ---- nomes dos baralhos (roda depois de tudo, antes de exportar) ----
-DECK_CACHE_FILE = Path(__file__).resolve().parent / "deck_cache.json"  # separado do cache.json
+
+# ======== nomes dos baralhos (depois de tudo, antes de exportar) ========
+DECK_CACHE_FILE = Path(__file__).resolve().parent / "deck_cache.json"   # separado do cache.json
 SEP = "::"
 
 def yes(msg, default="n"):
@@ -258,12 +340,12 @@ def yes(msg, default="n"):
 def choose(title, opts, default):
     print(f"\n{title}")
     for k, v in opts.items():
-        print(f"  {k}) {v}")
+        print(f" {k}) {v}")
     while True:
         r = ask("Escolha", default)
         if r in opts:
             return r
-        print("  Opção inválida.")
+        print(" Opção inválida.")
 
 def load_deck_cache():
     try:
@@ -329,8 +411,8 @@ def pick_scope(decks):
     paths = sorted({tuple(n.split(SEP)) for _, n in decks},
                    key=lambda p: tuple(s.lower() for s in p))
     scope = choose("Quais baralhos traduzir?",
-                   {"1": "Só os baralhos principais (sub-baralhos mantêm o nome)",
-                    "2": "Todos os baralhos e sub-baralhos",
+                   {"1": "Só os baralhos principais (subbaralhos mantêm o nome)",
+                    "2": "Todos os baralhos e subbaralhos",
                     "3": "Escolher por número"}, "2")
     if scope == "1":
         return {p[:1] for p in paths}
@@ -346,7 +428,7 @@ def pick_scope(decks):
         nums = parse_numbers(raw, len(paths))
         if nums:
             return {paths[k - 1] for k in nums}      # só o último segmento de cada um muda
-        print("  Seleção inválida.")
+        print(" Seleção inválida.")
 
 def build_newseg(selected, method, src_lang, dcache):
     ordered = sorted(selected, key=lambda p: tuple(s.lower() for s in p))
@@ -361,10 +443,10 @@ def build_newseg(selected, method, src_lang, dcache):
         else:
             suggestion = memo.get(seg) or (auto.get(seg, seg) if method == "3" else seg)
             while True:
-                new = ask(f"  {SEP.join(p)}", suggestion)
+                new = ask(f" {SEP.join(p)}", suggestion)
                 if new and SEP not in new:
                     break
-                print(f"  Nome vazio ou contendo '{SEP}' não é válido.")
+                print(f" Nome vazio ou contendo '{SEP}' não é válido.")
             memo[seg] = new                       # mesmo segmento -> mesma sugestão
         if new != seg:
             newseg[p] = new
@@ -399,7 +481,7 @@ def rename_decks():
 
         print("\n=== Nomes de baralhos ===")
         for old, new in sorted(plan.values()):
-            print(f"  {old}  ->  {new}")
+            print(f" {old}  ->  {new}")
 
         finals = collections.defaultdict(list)       # Anki ignora maiúsculas/minúsculas
         for did, old in decks:
@@ -408,7 +490,7 @@ def rename_decks():
         if dups:
             print("\nConflito: mais de um baralho ficaria com o mesmo nome:")
             for k in dups:
-                print(f"  {k}")
+                print(f" {k}")
             if not yes("Tentar de novo?", "s"):
                 return
             continue
@@ -426,12 +508,15 @@ def rename_decks():
             col.decks.rename(did, new)               # pais antes dos filhos
             done += 1
         except Exception as e:
-            log(f"  não consegui renomear '{old}': {e}")
+            log(f" não consegui renomear '{old}': {e}")
     log(f"baralhos renomeados: {done}/{len(plan)}")
 
 rename_decks()
-log("exportando...")
-col.export_anki_package(out_path=OUT, options=ExportAnkiPackageOptions(
-    with_scheduling=False, with_deck_configs=False, with_media=True, legacy=False), limit=None)
+
+# ---- exporta ----
+with Heartbeat("exportando"):
+    col.export_anki_package(out_path=OUT, options=ExportAnkiPackageOptions(
+        with_scheduling=False, with_deck_configs=False, with_media=True, legacy=False), limit=None)
 col.close()
 log("pronto ->", OUT)
+log("uso DeepL ao final:", tr.get_usage().character)

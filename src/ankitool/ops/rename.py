@@ -57,7 +57,7 @@ class DeckRenamer:
                 break
             for s, r in zip(chunk, res):
                 already = lang_base(r.detected_source_lang) == self.tbase  # already in the output language
-                bucket[s] = s if already else self.clean_seg(r.text, s)
+                bucket[s] = s if already else self.clean_seg(r.text or "", s)
             self.cache.save()
         return {s: bucket.get(s, s) for s in segments}
 

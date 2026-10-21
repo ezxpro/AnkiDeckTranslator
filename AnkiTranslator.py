@@ -857,42 +857,26 @@ class FieldTranslator:
 class DeckRenamer:
     """Traduz/altera nomes de baralhos. Traduz segmentos soltos (nunca o caminho completo).
     Baralhos principais são os de primeiro nível; baralhos secundários são os que
-    ficam dentro de outro baralho (separados por '::')."""
+    ficam dentro de outro baralho (separados por '::'). Sem perguntas: as menus ficam em
+    DeckRenameCli."""
 
-    def __init__(self, anki, client, target, picked, cache, cfg, rep):
-        self.rep = rep
-        self.cfg = cfg
-        self.anki, self.client = anki, client
+    def __init__(self, anki, client, target, cache, rep=None):
+        self.anki, self.client, self.cache = anki, client, cache
         self.target, self.tbase = target, lang_base(target)
-        self.picked = picked
-        self.cache = cache
+        self.rep = rep or Reporter()
 
     # ---- seleção ----
-    def pick_scope(self, decks):
-        """Devolve o conjunto de prefixos (tuplas de segmentos) cujo nome será traduzido."""
-        paths = sorted({tuple(n.split(SEP)) for _, n in decks},
-                       key=lambda p: tuple(s.lower() for s in p))
-        scope = {"main": "1", "all": "2"}.get(self.mode) or Ui.choose(
-            "Quais baralhos você quer renomear?",
-            {"1": ("Só os baralhos principais",
-                   "Os baralhos que ficam DENTRO de outro baralho mantêm o nome de hoje."),
-             "2": ("Todos os baralhos",
-                   "Os principais e os que ficam dentro deles."),
-             "3": ("Eu escolho numa lista",
-                   "Você vê a lista e digita os números dos baralhos que quer renomear."),
-             "0": ("Cancelar", "Não mexer nos nomes dos baralhos.")}, "2")
-        if scope == "0":
-            return None
-        if scope == "1":
+    @staticmethod
+    def paths(decks):
+        return sorted({tuple(n.split(SEP)) for _, n in decks},
+                      key=lambda p: tuple(s.lower() for s in p))
+
+    @staticmethod
+    def scope_for(mode, paths):
+        """'main' -> só o 1º nível; 'all' -> todos os níveis."""
+        if mode == "main":
             return {p[:1] for p in paths}
-        if scope == "2":
-            return {p[:i + 1] for p in paths for i in range(len(p))}
-        labels = ["  " * (len(p) - 1) + p[-1] for p in paths]
-        idx = Ui.select("Quais baralhos você quer renomear?", labels, multi=True, default=None,
-                        intro="(Os baralhos mais para a direita ficam dentro do baralho de cima.)")
-        if idx is None:
-            return None
-        return {paths[k] for k in idx}               # só o último segmento de cada um muda
+        return {p[:i + 1] for p in paths for i in range(len(p))}
 
     # ---- nomes ----
     @staticmethod
@@ -904,9 +888,10 @@ class DeckRenamer:
         bucket = self.cache.bucket(self.target, src_lang)
         pending = sorted(s for s in segments if s not in bucket)
         self.rep.log(f"nomes de baralhos: {len(pending)} a traduzir "
-            f"({len(segments) - len(pending)} já no cache)")
+                     f"({len(segments) - len(pending)} já no cache)")
         step = self.client.batch_size
         for i in range(0, len(pending), step):
+            self.rep.check_cancelled()
             chunk = pending[i:i + step]
             res = self.client.translate(chunk, target_lang=self.target, source_lang=src_lang)
             if res is None:
@@ -918,33 +903,16 @@ class DeckRenamer:
             self.cache.save()
         return {s: bucket.get(s, s) for s in segments}
 
-    def build_newseg(self, selected, method, src_lang):
-        ordered = sorted(selected, key=lambda p: tuple(s.lower() for s in p))
-        overrides = self.cfg.names                 # --deck-name ATUAL=NOVO: sempre vence
+    def auto_newseg(self, selected, overrides, src_lang, translate=True):
+        """{caminho: novo último segmento}. 'overrides' (--deck-name) sempre vence;
+        translate=False só aplica os overrides."""
         auto = {}
-        if method in ("1", "3"):
+        if translate:
             auto = self.auto_names({p[-1] for p in selected if p[-1] not in overrides}, src_lang)
-        if method in ("2", "3") and not Ui.auto:
-            print("\nVou mostrar um baralho de cada vez.")
-            print("O nome entre [colchetes] é o que será usado se você só apertar Enter.")
-            print("Para usar outro nome, digite o nome novo e aperte Enter.\n")
-        newseg, memo = {}, {}
-        for p in ordered:
+        newseg = {}
+        for p in sorted(selected, key=lambda p: tuple(s.lower() for s in p)):
             seg = p[-1]
-            if seg in overrides:
-                new = overrides[seg]
-            elif method == "1":
-                new = auto.get(seg, seg)
-            elif method == "0":                          # só os nomes de --deck-name mudam
-                new = seg
-            else:
-                suggestion = memo.get(seg) or (auto.get(seg, seg) if method == "3" else seg)
-                while True:
-                    new = Ui.ask(f"  Baralho '{SEP.join(p)}' - novo nome", suggestion)
-                    if new and SEP not in new:
-                        break
-                    print(f"  Nome vazio ou contendo '{SEP}' não é válido. Tente outro.")
-                memo[seg] = new                       # mesmo segmento -> mesma sugestão
+            new = overrides[seg] if seg in overrides else auto.get(seg, seg)
             if new != seg:
                 newseg[p] = new
         return newseg
@@ -954,66 +922,21 @@ class DeckRenamer:
         p = tuple(name.split(SEP))
         return SEP.join(newseg.get(p[:i + 1], p[i]) for i in range(len(p)))
 
-    # ---- fluxo principal ----
-    def run(self):
-        # None = perguntar; none/main/all. --deck-name sozinho implica escopo "all"
-        self.mode = mode = self.cfg.mode or ("all" if self.cfg.names else None)
-        decks = self.anki.deck_list()
-        if mode == "none" or not decks:
-            return
-        if mode is None and not Ui.yes(
-                "\nQuer também mudar os NOMES dos baralhos?\n"
-                "  (Isso é só o nome das pastas onde os cartões ficam guardados no Anki. "
-                "Os cartões já foram traduzidos.)", "n"):
-            return
-        selected = self.pick_scope(decks)
-        if not selected:
-            return
-        src_lang = next(iter(self.picked)) if len(self.picked) == 1 else None
-        # método fixo por opção; se o escopo veio por opção, o padrão é automático
-        fixed_method = {"auto": "1", "manual": "2", "review": "3", "keep": "0"}.get(
-            self.cfg.method) or ("0" if self.cfg.names else "1" if mode else None)
+    def make_plan(self, decks, newseg):
+        """{id: (nome atual, nome novo)} só dos baralhos que mudam."""
+        plan = {did: (old, self.final_name(old, newseg)) for did, old in decks}
+        return {did: v for did, v in plan.items() if v[0] != v[1]}
 
-        while True:
-            method = fixed_method or Ui.choose(
-                "Como você quer escolher os nomes novos?",
-                {"1": (f"Automático ({self.client.label})",
-                       f"O {self.client.label} traduz todos os nomes sozinho. Você só confere no final."),
-                 "2": ("Manual",
-                       "Você digita o nome novo de cada baralho. Enter mantém o nome de hoje."),
-                 "3": ("Revisar um a um",
-                       f"O {self.client.label} sugere um nome para cada baralho. "
-                       "Enter aceita a sugestão; ou você digita outro.")}, "1")
-            newseg = self.build_newseg(selected, method, src_lang)
-            plan = {did: (old, self.final_name(old, newseg)) for did, old in decks}
-            plan = {did: v for did, v in plan.items() if v[0] != v[1]}
-            if not plan:
-                self.rep.log("nenhum nome de baralho mudou")
-                return
+    @staticmethod
+    def duplicates(decks, plan):
+        """Nomes finais repetidos (o Anki ignora maiúsculas/minúsculas)."""
+        finals = collections.defaultdict(list)
+        for did, old in decks:
+            finals[(plan[did][1] if did in plan else old).lower()].append(did)
+        return [k for k, v in finals.items() if len(v) > 1]
 
-            print("\n=== Nomes de baralhos: como era  ->  como vai ficar ===")
-            for old, new in sorted(plan.values()):
-                print(f" {old}  ->  {new}")
-
-            finals = collections.defaultdict(list)       # Anki ignora maiúsculas/minúsculas
-            for did, old in decks:
-                finals[(plan[did][1] if did in plan else old).lower()].append(did)
-            dups = [k for k, v in finals.items() if len(v) > 1]
-            if dups:
-                print("\nProblema: mais de um baralho ficaria com o mesmo nome:")
-                for k in dups:
-                    print(f" {k}")
-                if fixed_method or not Ui.yes("\nQuer tentar de novo, escolhendo outros nomes?", "s"):
-                    return                               # método fixo daria o mesmo conflito
-                continue
-            if Ui.yes("\nQuer aplicar esses nomes novos?", "s"):
-                break
-            if not Ui.yes("\nQuer tentar de novo, escolhendo outros nomes?", "n"):
-                return
-
-        self._apply(plan)
-
-    def _apply(self, plan):
+    # ---- aplicação ----
+    def apply(self, plan):
         decks_api = self.anki.col.decks
         done = 0
         for did, (old, new) in sorted(plan.items(), key=lambda kv: kv[1][0].count(SEP)):
@@ -1026,6 +949,125 @@ class DeckRenamer:
             except Exception as e:
                 self.rep.warn(f" não consegui renomear '{old}': {e}")
         self.rep.log(f"baralhos renomeados: {done}/{len(plan)}")
+
+    def run_auto(self, mode="all", overrides=None, src_lang=None, translate=True):
+        """Uso como biblioteca: sem perguntas. Devolve o plano aplicado."""
+        decks = self.anki.deck_list()
+        selected = self.scope_for(mode, self.paths(decks))
+        plan = self.make_plan(decks, self.auto_newseg(selected, overrides or {}, src_lang, translate))
+        if self.duplicates(decks, plan):
+            raise AnkiToolError("Mais de um baralho ficaria com o mesmo nome.")
+        self.apply(plan)
+        return plan
+
+class DeckRenameCli:
+    """Perguntas e textos do renomeio de baralhos. Toda a lógica está em DeckRenamer."""
+
+    def __init__(self, ren, cfg):
+        self.ren, self.cfg = ren, cfg
+
+    def pick_scope(self, paths, mode):
+        """Devolve o conjunto de prefixos (tuplas de segmentos) cujo nome será traduzido."""
+        scope = {"main": "1", "all": "2"}.get(mode) or Ui.choose(
+            "Quais baralhos você quer renomear?",
+            {"1": ("Só os baralhos principais",
+                   "Os baralhos que ficam DENTRO de outro baralho mantêm o nome de hoje."),
+             "2": ("Todos os baralhos",
+                   "Os principais e os que ficam dentro deles."),
+             "3": ("Eu escolho numa lista",
+                   "Você vê a lista e digita os números dos baralhos que quer renomear."),
+             "0": ("Cancelar", "Não mexer nos nomes dos baralhos.")}, "2")
+        if scope == "0":
+            return None
+        if scope in ("1", "2"):
+            return DeckRenamer.scope_for("main" if scope == "1" else "all", paths)
+        labels = ["  " * (len(p) - 1) + p[-1] for p in paths]
+        idx = Ui.select("Quais baralhos você quer renomear?", labels, multi=True, default=None,
+                        intro="(Os baralhos mais para a direita ficam dentro do baralho de cima.)")
+        if idx is None:
+            return None
+        return {paths[k] for k in idx}               # só o último segmento de cada um muda
+
+    def build_newseg(self, selected, method, src_lang):
+        ren, overrides = self.ren, self.cfg.names    # --deck-name ATUAL=NOVO: sempre vence
+        if method in ("0", "1"):                     # sem perguntas ("0": só os de --deck-name)
+            return ren.auto_newseg(selected, overrides, src_lang, translate=(method == "1"))
+        auto = {}
+        if method == "3":
+            auto = ren.auto_names({p[-1] for p in selected if p[-1] not in overrides}, src_lang)
+        if not Ui.auto:
+            print("\nVou mostrar um baralho de cada vez.")
+            print("O nome entre [colchetes] é o que será usado se você só apertar Enter.")
+            print("Para usar outro nome, digite o nome novo e aperte Enter.\n")
+        newseg, memo = {}, {}
+        for p in sorted(selected, key=lambda p: tuple(s.lower() for s in p)):
+            seg = p[-1]
+            if seg in overrides:
+                new = overrides[seg]
+            else:
+                suggestion = memo.get(seg) or (auto.get(seg, seg) if method == "3" else seg)
+                while True:
+                    new = Ui.ask(f"  Baralho '{SEP.join(p)}' - novo nome", suggestion)
+                    if new and SEP not in new:
+                        break
+                    print(f"  Nome vazio ou contendo '{SEP}' não é válido. Tente outro.")
+                memo[seg] = new                       # mesmo segmento -> mesma sugestão
+            if new != seg:
+                newseg[p] = new
+        return newseg
+
+    def run(self, src_lang=None):
+        ren, cfg = self.ren, self.cfg
+        # None = perguntar; none/main/all. --deck-name sozinho implica escopo "all"
+        mode = cfg.mode or ("all" if cfg.names else None)
+        decks = ren.anki.deck_list()
+        if mode == "none" or not decks:
+            return
+        if mode is None and not Ui.yes(
+                "\nQuer também mudar os NOMES dos baralhos?\n"
+                "  (Isso é só o nome das pastas onde os cartões ficam guardados no Anki. "
+                "Os cartões já foram traduzidos.)", "n"):
+            return
+        selected = self.pick_scope(ren.paths(decks), mode)
+        if not selected:
+            return
+        # método fixo por opção; se o escopo veio por opção, o padrão é automático
+        fixed_method = {"auto": "1", "manual": "2", "review": "3", "keep": "0"}.get(
+            cfg.method) or ("0" if cfg.names else "1" if mode else None)
+
+        while True:
+            method = fixed_method or Ui.choose(
+                "Como você quer escolher os nomes novos?",
+                {"1": (f"Automático ({ren.client.label})",
+                       f"O {ren.client.label} traduz todos os nomes sozinho. Você só confere no final."),
+                 "2": ("Manual",
+                       "Você digita o nome novo de cada baralho. Enter mantém o nome de hoje."),
+                 "3": ("Revisar um a um",
+                       f"O {ren.client.label} sugere um nome para cada baralho. "
+                       "Enter aceita a sugestão; ou você digita outro.")}, "1")
+            plan = ren.make_plan(decks, self.build_newseg(selected, method, src_lang))
+            if not plan:
+                ren.rep.log("nenhum nome de baralho mudou")
+                return
+
+            print("\n=== Nomes de baralhos: como era  ->  como vai ficar ===")
+            for old, new in sorted(plan.values()):
+                print(f" {old}  ->  {new}")
+
+            dups = ren.duplicates(decks, plan)
+            if dups:
+                print("\nProblema: mais de um baralho ficaria com o mesmo nome:")
+                for k in dups:
+                    print(f" {k}")
+                if fixed_method or not Ui.yes("\nQuer tentar de novo, escolhendo outros nomes?", "s"):
+                    return                               # método fixo daria o mesmo conflito
+                continue
+            if Ui.yes("\nQuer aplicar esses nomes novos?", "s"):
+                break
+            if not Ui.yes("\nQuer tentar de novo, escolhendo outros nomes?", "n"):
+                return
+
+        ren.apply(plan)
 
 # ======================================================================
 # Aplicação
@@ -1180,9 +1222,10 @@ class AnkiTranslatorApp:
                 return
             self.anki.apply_translations(chosen, self.cache)
 
-            DeckRenamer(self.anki, self.client, self.target, picked, self.deck_cache,
-                        RenameConfig(self.opts.rename_decks, self.opts.deck_method,
-                                     self.opts.deck_names), self.rep).run()
+            src_lang = next(iter(picked)) if len(picked) == 1 else None
+            renamer = DeckRenamer(self.anki, self.client, self.target, self.deck_cache, self.rep)
+            DeckRenameCli(renamer, RenameConfig(self.opts.rename_decks, self.opts.deck_method,
+                                                self.opts.deck_names)).run(src_lang)
 
             self.anki.export(out)
             print("pronto ->", out)
@@ -1710,7 +1753,7 @@ def main(argv=None):
                 key = Ui.choose("O que você quer fazer?", options, "1")
                 if key == "0":
                     break
-                opts = parse_args([MgENU[key][0]])
+                opts = parse_args([MENU[key][0]])
 
             Ui.auto = getattr(opts, "yes", False)
 

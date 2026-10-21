@@ -33,18 +33,111 @@ class Ui:
 
     @staticmethod
     def yes(msg, default="n"):
-        return Ui.ask(f"{msg} (s/n)", default).lower() in ("s", "sim", "y", "yes")
+        """Pergunta de sim/não. Só aceita s/n (ou variações); Enter usa o padrão."""
+        if Ui.auto:
+            return default.lower() in ("s", "sim", "y", "yes")
+        padrao = "sim" if default.lower() in ("s", "sim", "y", "yes") else "não"
+        while True:
+            r = input(f"{msg}\n  Digite s (sim) ou n (não). Só Enter = {padrao}: ").strip().lower()
+            if r == "":
+                r = default.lower()
+            if r in ("s", "sim", "y", "yes"):
+                return True
+            if r in ("n", "nao", "não", "no"):
+                return False
+            print("  Não entendi. Digite s para sim ou n para não.")
 
     @staticmethod
     def choose(title, opts, default):
+        """Menu de UMA escolha. opts: {"1": "Texto"} ou {"1": ("Texto", "explicação curta")}."""
         print(f"\n{title}")
         for k, v in opts.items():
-            print(f" {k}) {v}")
+            label, desc = v if isinstance(v, tuple) else (v, None)
+            mark = "   <- padrão (só apertar Enter)" if k == default else ""
+            print(f"  {k}) {label}{mark}")
+            if desc:
+                print(f"       {desc}")
+        print("\nDigite o número da opção e aperte Enter.")
         while True:
             r = Ui.ask("Escolha", default)
             if r in opts:
                 return r
-            print(" Opção inválida.")
+            print(f"  Opção inválida. Digite um destes números: {', '.join(opts)}.")
+
+    @staticmethod
+    def parse_numbers(raw, n):
+        """'1,3,5-8' -> {1,3,5,6,7,8}; None se algo estiver fora de 1..n."""
+        out = set()
+        for tok in re.split(r"[,\s;]+", raw):
+            if not tok:
+                continue
+            m = re.fullmatch(r"(\d+)-(\d+)", tok)
+            rng = range(int(m[1]), int(m[2]) + 1) if m else ([int(tok)] if tok.isdigit() else None)
+            if rng is None or any(not 1 <= k <= n for k in rng):
+                return None
+            out.update(rng)
+        return out or None
+
+    @staticmethod
+    def select(title, labels, multi=True, default="all", intro=None, hint=None,
+               aliases=None, cancel=True):
+        """Lista numerada para escolher itens. Devolve lista de índices (a partir de 0),
+        ou None se a pessoa cancelou (0).
+        default: 'all' (Enter = todos), 'first' (Enter = o 1) ou None (Enter não vale).
+        aliases: {TEXTO_EM_MAIUSCULAS: índice}, para aceitar também códigos digitados."""
+        n = len(labels)
+        if Ui.auto:
+            return list(range(n)) if default == "all" else [0] if default == "first" else None
+        print(f"\n{title}")
+        if intro:
+            print(intro)
+        print()
+        for i, lab in enumerate(labels, 1):
+            print(f"  {i:>3}) {lab}")
+        if cancel:
+            print("    0) Cancelar (não fazer nada)")
+        print()
+        if multi:
+            print("Como escolher: digite o número do item e aperte Enter.")
+            print("Para escolher vários, separe por vírgula (ex.: 1,3) ou use intervalo (ex.: 2-5).")
+        else:
+            print("Como escolher: digite o número do item e aperte Enter.")
+        if hint:
+            print(hint)
+        if default == "all":
+            print("Se você só apertar Enter, eu escolho TODOS os itens.")
+        elif default == "first":
+            print("Se você só apertar Enter, eu escolho o item 1.")
+        while True:
+            raw = input("Sua escolha: ").strip().strip('"')
+            if raw == "":
+                if default == "all":
+                    return list(range(n))
+                if default == "first":
+                    return [0]
+                print("  Preciso de uma resposta. Digite um número da lista.")
+                continue
+            if cancel and raw == "0":
+                return None
+            picked, bad = set(), []
+            for tok in re.split(r"[,\s;]+", raw):
+                if not tok:
+                    continue
+                if aliases and tok.upper() in aliases:
+                    picked.add(aliases[tok.upper()])
+                    continue
+                nums = Ui.parse_numbers(tok, n)
+                if nums:
+                    picked.update(k - 1 for k in nums)
+                else:
+                    bad.append(tok)
+            if picked and not bad and (multi or len(picked) == 1):
+                return sorted(picked)
+            if picked and not bad:
+                print("  Aqui dá para escolher só um item. Digite um único número.")
+            else:
+                print(f"  Não entendi '{', '.join(bad) or raw}'. Digite números de 1 a {n}"
+                      f"{', ou 0 para cancelar' if cancel else ''}.")
 
     @staticmethod
     def show_langs(title, langs):
@@ -83,6 +176,104 @@ class Ui:
             print()
 
 log = Ui.log
+
+# ======================================================================
+# Seletor de arquivos (em texto)
+# ======================================================================
+def default_start():
+    """Pasta inicial do seletor: a pasta atual, ou a do script, se só ali houver .apkg."""
+    def has_apkg(d):
+        try:
+            return any(p.suffix.lower() == ".apkg" for p in d.iterdir() if p.is_file())
+        except OSError:
+            return False
+    cwd = Path.cwd()
+    if has_apkg(cwd) or not has_apkg(SCRIPT_DIR):
+        return cwd
+    return SCRIPT_DIR
+
+def pick_file(start=None, suffix=".apkg"):
+    """Navegador de arquivos no terminal. Mostra as pastas e os arquivos .apkg da pasta atual.
+    Devolve o Path do arquivo escolhido, ou None se a pessoa cancelou."""
+    cur = Path(start or Path.cwd()).resolve()
+    while True:
+        try:
+            entries = sorted(cur.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            print(f"\n  Não consegui abrir a pasta {cur}. Voltando uma pasta.")
+            if cur.parent == cur:
+                return None
+            cur = cur.parent
+            continue
+
+        dirs, files = [], []
+        for p in entries:
+            try:
+                if p.is_dir() and not p.name.startswith("."):
+                    dirs.append(p)
+                elif p.is_file() and p.suffix.lower() == suffix:
+                    files.append(p)
+            except OSError:
+                continue
+
+        print(f"\n=== Escolher arquivo {suffix} ===")
+        print(f"Você está na pasta: {cur}\n")
+        items = []
+        if cur.parent != cur:
+            print("   ..) Subir uma pasta (voltar)")
+        for p in dirs:
+            items.append(p)
+            print(f"  {len(items):>3}) [pasta]  {p.name}")
+        for p in files:
+            items.append(p)
+            try:
+                size = f"  ({p.stat().st_size / 1e6:.1f} MB)"
+            except OSError:
+                size = ""
+            print(f"  {len(items):>3}) {p.name}{size}")
+        if not items:
+            print(f"      (aqui não há pastas nem arquivos {suffix})")
+        print("    0) Cancelar (não escolher nenhum arquivo)")
+
+        print("\nComo usar:")
+        print("  - Número de uma [pasta]: entra nessa pasta.")
+        print(f"  - Número de um arquivo {suffix}: escolhe esse arquivo.")
+        print("  - Dois pontos (..): sobe uma pasta.")
+        print(f"  - Ou cole o caminho completo de um arquivo {suffix} (ou de uma pasta).")
+        raw = input("Sua escolha: ").strip().strip('"').strip("'")
+
+        if raw == "0":
+            return None
+        if raw == "..":
+            cur = cur.parent
+            continue
+        if raw.isdigit():
+            k = int(raw)
+            if 1 <= k <= len(items):
+                choice = items[k - 1]
+                if choice.is_dir():
+                    cur = choice
+                    continue
+                return choice
+            faixa = f"de 1 a {len(items)}, " if items else ""
+            print(f"\n  Número fora da lista. Digite um número {faixa}'..' ou 0.".replace("um número de", "um número de"))
+            continue
+        if raw:
+            p = Path(raw).expanduser()
+            if not p.is_absolute():
+                p = cur / p
+            try:
+                p = p.resolve()
+                if p.is_dir():
+                    cur = p
+                    continue
+                if p.is_file() and p.suffix.lower() == suffix:
+                    return p
+            except OSError:
+                pass
+            print(f"\n  Não achei '{raw}' como pasta nem como arquivo {suffix}.")
+            continue
+        print("\n  Preciso de uma resposta. Digite um número, '..' ou 0.")
 
 class Heartbeat:
     """Para chamadas longas sem progresso interno (importar/exportar):
@@ -302,7 +493,7 @@ def choose_provider(opts):
     if not name and len(PROVIDERS) > 1 and not Ui.auto:
         keys = {str(i): n for i, n in enumerate(sorted(PROVIDERS), 1)}
         default = next(k for k, n in keys.items() if n == DEFAULT_PROVIDER)
-        key = Ui.choose("Serviço de tradução:",
+        key = Ui.choose("Qual serviço de tradução você quer usar?",
                         {k: PROVIDERS[n].label for k, n in keys.items()}, default)
         name = keys[key]
     return make_provider(name or DEFAULT_PROVIDER)
@@ -574,43 +765,31 @@ class DeckRenamer:
         self.cache = cache
 
     # ---- seleção ----
-    @staticmethod
-    def parse_numbers(raw, n):
-        out = set()
-        for tok in re.split(r"[,\s;]+", raw):
-            if not tok:
-                continue
-            m = re.fullmatch(r"(\d+)-(\d+)", tok)
-            rng = range(int(m[1]), int(m[2]) + 1) if m else ([int(tok)] if tok.isdigit() else None)
-            if rng is None or any(not 1 <= k <= n for k in rng):
-                return None
-            out.update(rng)
-        return out or None
-
     def pick_scope(self, decks):
         """Devolve o conjunto de prefixos (tuplas de segmentos) cujo nome será traduzido."""
         paths = sorted({tuple(n.split(SEP)) for _, n in decks},
                        key=lambda p: tuple(s.lower() for s in p))
         scope = {"main": "1", "all": "2"}.get(self.mode) or Ui.choose(
-                          "Quais baralhos traduzir?",
-                          {"1": "Só os baralhos principais (baralhos secundários mantêm o nome)",
-                           "2": "Todos os baralhos, principais e secundários",
-                           "3": "Escolher por número"}, "2")
+            "Quais baralhos você quer renomear?",
+            {"1": ("Só os baralhos principais",
+                   "Os baralhos que ficam DENTRO de outro baralho mantêm o nome de hoje."),
+             "2": ("Todos os baralhos",
+                   "Os principais e os que ficam dentro deles."),
+             "3": ("Eu escolho numa lista",
+                   "Você vê a lista e digita os números dos baralhos que quer renomear."),
+             "0": ("Cancelar", "Não mexer nos nomes dos baralhos.")}, "2")
+        if scope == "0":
+            return None
         if scope == "1":
             return {p[:1] for p in paths}
         if scope == "2":
             return {p[:i + 1] for p in paths for i in range(len(p))}
-        print()
-        for i, p in enumerate(paths, 1):
-            print(f" {i:>3}) {'  ' * (len(p) - 1)}{p[-1]}")
-        while True:
-            raw = Ui.ask("Números (ex.: 1,3,5-8; n = cancelar)", "n")
-            if raw.lower() in ("n", "nao", "não"):
-                return None
-            nums = self.parse_numbers(raw, len(paths))
-            if nums:
-                return {paths[k - 1] for k in nums}      # só o último segmento de cada um muda
-            print(" Seleção inválida.")
+        labels = ["  " * (len(p) - 1) + p[-1] for p in paths]
+        idx = Ui.select("Quais baralhos você quer renomear?", labels, multi=True, default=None,
+                        intro="(Os baralhos mais para a direita ficam dentro do baralho de cima.)")
+        if idx is None:
+            return None
+        return {paths[k] for k in idx}               # só o último segmento de cada um muda
 
     # ---- nomes ----
     @staticmethod
@@ -642,6 +821,10 @@ class DeckRenamer:
         auto = {}
         if method in ("1", "3"):
             auto = self.auto_names({p[-1] for p in selected if p[-1] not in overrides}, src_lang)
+        if method in ("2", "3") and not Ui.auto:
+            print("\nVou mostrar um baralho de cada vez.")
+            print("O nome entre [colchetes] é o que será usado se você só apertar Enter.")
+            print("Para usar outro nome, digite o nome novo e aperte Enter.\n")
         newseg, memo = {}, {}
         for p in ordered:
             seg = p[-1]
@@ -654,10 +837,10 @@ class DeckRenamer:
             else:
                 suggestion = memo.get(seg) or (auto.get(seg, seg) if method == "3" else seg)
                 while True:
-                    new = Ui.ask(f" {SEP.join(p)}", suggestion)
+                    new = Ui.ask(f"  Baralho '{SEP.join(p)}' - novo nome", suggestion)
                     if new and SEP not in new:
                         break
-                    print(f" Nome vazio ou contendo '{SEP}' não é válido.")
+                    print(f"  Nome vazio ou contendo '{SEP}' não é válido. Tente outro.")
                 memo[seg] = new                       # mesmo segmento -> mesma sugestão
             if new != seg:
                 newseg[p] = new
@@ -675,7 +858,10 @@ class DeckRenamer:
         decks = self.anki.deck_list()
         if mode == "none" or not decks:
             return
-        if mode is None and not Ui.yes("\nTraduzir/alterar nomes de baralhos?", "n"):
+        if mode is None and not Ui.yes(
+                "\nQuer também mudar os NOMES dos baralhos?\n"
+                "  (Isso é só o nome das pastas onde os cartões ficam guardados no Anki. "
+                "Os cartões já foram traduzidos.)", "n"):
             return
         selected = self.pick_scope(decks)
         if not selected:
@@ -686,10 +872,15 @@ class DeckRenamer:
             self.opts.deck_method) or ("0" if self.opts.deck_names else "1" if mode else None)
 
         while True:
-            method = fixed_method or Ui.choose("Como alterar os nomes?",
-                               {"1": f"Automático ({self.client.label})",
-                                "2": "Manual (você digita; Enter mantém o atual)",
-                                "3": f"Revisar um a um (sugestão do {self.client.label}; Enter aceita)"}, "1")
+            method = fixed_method or Ui.choose(
+                "Como você quer escolher os nomes novos?",
+                {"1": (f"Automático ({self.client.label})",
+                       f"O {self.client.label} traduz todos os nomes sozinho. Você só confere no final."),
+                 "2": ("Manual",
+                       "Você digita o nome novo de cada baralho. Enter mantém o nome de hoje."),
+                 "3": ("Revisar um a um",
+                       f"O {self.client.label} sugere um nome para cada baralho. "
+                       "Enter aceita a sugestão; ou você digita outro.")}, "1")
             newseg = self.build_newseg(selected, method, src_lang)
             plan = {did: (old, self.final_name(old, newseg)) for did, old in decks}
             plan = {did: v for did, v in plan.items() if v[0] != v[1]}
@@ -697,7 +888,7 @@ class DeckRenamer:
                 log("nenhum nome de baralho mudou")
                 return
 
-            print("\n=== Nomes de baralhos ===")
+            print("\n=== Nomes de baralhos: como era  ->  como vai ficar ===")
             for old, new in sorted(plan.values()):
                 print(f" {old}  ->  {new}")
 
@@ -706,15 +897,15 @@ class DeckRenamer:
                 finals[(plan[did][1] if did in plan else old).lower()].append(did)
             dups = [k for k, v in finals.items() if len(v) > 1]
             if dups:
-                print("\nConflito: mais de um baralho ficaria com o mesmo nome:")
+                print("\nProblema: mais de um baralho ficaria com o mesmo nome:")
                 for k in dups:
                     print(f" {k}")
-                if fixed_method or not Ui.yes("Tentar de novo?", "s"):
+                if fixed_method or not Ui.yes("\nQuer tentar de novo, escolhendo outros nomes?", "s"):
                     return                               # método fixo daria o mesmo conflito
                 continue
-            if Ui.yes("\nAplicar?", "s"):
+            if Ui.yes("\nQuer aplicar esses nomes novos?", "s"):
                 break
-            if not Ui.yes("Tentar de novo?", "n"):
+            if not Ui.yes("\nQuer tentar de novo, escolhendo outros nomes?", "n"):
                 return
 
         self._apply(plan)
@@ -765,19 +956,23 @@ class AnkiTranslatorApp:
                                  f"Use o comando 'langs' para ver os códigos.")
         else:
             if not Ui.auto:
-                Ui.show_langs("Idiomas de saída disponíveis (código nome):",
+                Ui.show_langs("Idiomas para os quais dá para traduzir (código e nome):",
                               self.client.target_langs)
+                print("Para qual idioma você quer traduzir o baralho?")
+                print("Digite o CÓDIGO da lista acima (ex.: PT-BR, EN-US, ES) e aperte Enter.")
+                print(f"Se você só apertar Enter, uso {self.client.default_target}.")
             while True:
-                raw = Ui.ask("Idioma de saída (Enter = português do Brasil, "
-                             "ou digite um código da lista acima)", self.client.default_target)
+                raw = Ui.ask("Idioma de saída", self.client.default_target)
                 target = self.client.resolve_target(raw)
                 if target:
                     break
-                print(f" '{raw}' não é um código válido. Use um dos códigos da lista acima.")
+                print(f"  '{raw}' não é um código da lista. Digite um dos códigos que aparecem acima.")
         self.target, self.tbase = target, lang_base(target)
 
     def show_detected(self, detected):
-        print("\n=== Idioma detectado em cada campo ===")
+        print("\n=== Idioma que encontrei em cada campo ===")
+        print("(Olhei alguns cartões de cada campo e adivinhei o idioma. "
+              "A % diz o quanto tenho certeza.)")
         cur = None
         for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0][0]):
             if mid != cur:
@@ -809,39 +1004,30 @@ class AnkiTranslatorApp:
             self.anki.close()
             raise SystemExit("\nNenhum campo em outro idioma para traduzir.")
 
-        print(f"\n=== Idiomas que podem ser traduzidos para {self.target} ===")
-        for i, (code, c) in enumerate(options, 1):
-            print(f" {i}) {code} - {self.client.source_names.get(code, code)} ({c} campos)")
-        if already:
-            print(f" ({already} campos já estão em {self.tbase} e serão mantidos; "
-                  f"campos 'incertos' também)")
+        labels = [f"{code} - {self.client.source_names.get(code, code)} ({c} campos)"
+                  for code, c in options]
+        note = (f"({already} campo(s) já estão em {self.tbase} e serão mantidos do jeito que estão; "
+                f"campos 'incertos' também.)") if already else None
 
-        valid = dict(options)
         if self.opts.lang or Ui.auto:                    # sem pergunta: --lang, ou todos com --yes
-            return self._languages_from_args(valid)
-        default = "1" if len(options) == 1 else ""
-        while True:
-            prompt = ("\nTraduzir qual idioma? número ou código "
-                      "(vários separados por vírgula, n = cancelar)")
-            raw = input(f"{prompt}{f' [{default}]' if default else ''}: "
-                        ).strip().strip('"').upper() or default
-            if raw in ("N", "NAO", "NÃO"):
-                self.anki.close()
-                raise SystemExit("Cancelado.")
-            picked, bad = set(), []
-            for tok in re.split(r"[,\s;]+", raw):
-                if not tok:
-                    continue
-                if tok.isdigit() and 1 <= int(tok) <= len(options):
-                    picked.add(options[int(tok) - 1][0])
-                elif tok in valid:
-                    picked.add(tok)
-                else:
-                    bad.append(tok)
-            if picked and not bad:
-                return picked
-            print(f" Opção inválida: {', '.join(bad) or raw}. "
-                  f"Escolha entre os números/códigos listados.")
+            print(f"\n=== Idiomas que podem ser traduzidos para {self.target} ===")
+            for i, lab in enumerate(labels, 1):
+                print(f" {i}) {lab}")
+            if note:
+                print(f" {note}")
+            return self._languages_from_args(dict(options))
+
+        intro = ("Estes são os idiomas que encontrei no baralho. Escolha quais você quer traduzir."
+                 + (f"\n{note}" if note else ""))
+        idx = Ui.select(f"Quais idiomas você quer traduzir para {self.target}?", labels,
+                        multi=True, default="all" if len(options) == 1 else None,
+                        intro=intro,
+                        hint="Também vale digitar o código do idioma (ex.: IT, ou IT,EN).",
+                        aliases={code.upper(): i for i, (code, _) in enumerate(options)})
+        if idx is None:
+            self.anki.close()
+            raise SystemExit("Cancelado.")
+        return {options[i][0] for i in idx}
 
     # ---- fluxo ----
     def run(self):
@@ -878,18 +1064,44 @@ class AnkiTranslatorApp:
 # Inverter cartões (comando separado, sem serviço de tradução)
 # ======================================================================
 def ask_input(opts):
-    """Pergunta (ou lê das opções) o .apkg de entrada."""
-    src = Path(opts.input or Ui.ask("Arquivo de entrada", "italian.apkg")).resolve()
+    """Lê o .apkg de entrada das opções ou abre o seletor de arquivos."""
+    if opts.input:
+        src = Path(opts.input).expanduser().resolve()
+    elif Ui.auto:
+        raise SystemExit("Com -y/--yes é preciso informar o arquivo .apkg de entrada.")
+    else:
+        print("\nPrimeiro, escolha o baralho (arquivo .apkg) que você quer usar.")
+        src = pick_file(default_start())
+        if src is None:
+            raise SystemExit("Cancelado.")
     if not src.exists():
         raise SystemExit(f"Arquivo não encontrado: {src}")
     return src
 
 def ask_paths(opts, suffix="_out"):
-    """Pergunta (ou lê das opções) o .apkg de entrada e o de saída."""
+    """Escolhe o .apkg de entrada (seletor) e o nome do .apkg de saída."""
     src = ask_input(opts)
-    out = Path(opts.output or Ui.ask("Arquivo de saída", f"{src.stem}{suffix}.apkg")).resolve()
+    if opts.output:
+        out = Path(opts.output).expanduser()
+    else:
+        default = f"{src.stem}{suffix}.apkg"
+        if Ui.auto:
+            name = default
+        else:
+            print("\nAgora escolha o nome do arquivo NOVO que vou criar. O arquivo original não é alterado.")
+            print(f"Ele será salvo na mesma pasta do original: {src.parent}")
+            name = Ui.ask("Nome do arquivo novo (só Enter = usar o nome sugerido)", default)
+        out = Path(name).expanduser()
+    if not out.is_absolute() and out.parent == Path("."):
+        out = src.parent / out                            # nome simples: fica ao lado do original
+    out = out.resolve()
     if out.suffix.lower() != ".apkg":
         out = out.with_name(out.name + ".apkg")
+    if out == src:
+        raise SystemExit("O arquivo novo não pode ter o mesmo nome do original.")
+    if out.exists() and not Ui.auto and not opts.output and not Ui.yes(
+            f"\nJá existe um arquivo chamado '{out.name}'. Quer substituí-lo?", "n"):
+        raise SystemExit("Cancelado: rode de novo e escolha outro nome.")
     return src, out
 
 class CardReverser:
@@ -1007,33 +1219,27 @@ class CardReverser:
             return chosen
         if Ui.auto:
             return cands
-        print("\n=== Tipos de nota que podem ser invertidos ===")
-        for i, nt in enumerate(cands, 1):
-            print(f" {i}) {nt['name']} ({self.counts[nt['id']]} notas, "
-                  f"{len(nt['flds'])} campos)")
-        while True:
-            raw = Ui.ask("\nQuais inverter? (todos, ou números ex.: 1,3; n = cancelar)", "todos")
-            if raw.lower() in ("n", "nao", "não"):
-                return []
-            if raw.lower() in ("todos", "all", "t"):
-                return cands
-            nums = DeckRenamer.parse_numbers(raw, len(cands))
-            if nums:
-                return [cands[k - 1] for k in sorted(nums)]
-            print(" Seleção inválida.")
+        labels = [f"{nt['name']}  ({self.counts[nt['id']]} notas, {len(nt['flds'])} campos)"
+                  for nt in cands]
+        idx = Ui.select(
+            "Quais tipos de nota você quer inverter?", labels, multi=True, default="all",
+            intro=("Um 'tipo de nota' é o modelo dos seus cartões (por exemplo: Básico, Vocabulário).\n"
+                   "Cada tipo tem 'campos', como Palavra e Tradução. Os números entre parênteses\n"
+                   "dizem quantas notas usam esse tipo."))
+        return [] if idx is None else [cands[i] for i in idx]
 
     def show_layout(self, nt, pairs):
         front, back = self.layout(nt)
         paired = {n for p in pairs for n in p}
         stay = [f["name"] for f in nt["flds"] if f["name"] not in paired]
-        print(f"\n {nt['name']} ({self.counts[nt['id']]} notas)")
-        print(f"   Frente hoje: {', '.join(front) or '-'}")
-        print(f"   Verso hoje:  {', '.join(back) or '-'}")
-        print("   Troca sugerida (cada campo passa a ocupar o lugar do outro):")
+        print(f"\n Tipo de nota: {nt['name']} ({self.counts[nt['id']]} notas)")
+        print(f"   Hoje a FRENTE do cartão mostra: {', '.join(front) or '-'}")
+        print(f"   Hoje o VERSO do cartão mostra:  {', '.join(back) or '-'}")
+        print("   Para inverter, eu trocaria de lugar estes campos:")
         for a, b in pairs:
             print(f"     {a}  <->  {b}")
         if stay:
-            print(f"   Não mudam de lado: {', '.join(stay)}")
+            print(f"   Estes não mudam de lado: {', '.join(stay)}")
 
     def pick_pairs(self, nt):
         names = [f["name"] for f in nt["flds"]]
@@ -1046,17 +1252,27 @@ class CardReverser:
         if Ui.auto or len(names) == 2:                    # com 2 campos não há o que escolher
             return pairs
         self.show_layout(nt, pairs)
+        key = Ui.choose(
+            f"O que fazer com o tipo '{nt['name']}'?",
+            {"1": ("Usar a troca sugerida acima", "É o que eu recomendo na maioria dos casos."),
+             "2": ("Digitar outros pares de campos",
+                   "Você diz quais campos trocam de lugar."),
+             "0": ("Pular este tipo de nota", "Ele não será invertido.")}, "1")
+        if key == "1":
+            return pairs
+        if key == "0":
+            return None
+        print(f"\nDigite os pares assim: Campo1=Campo2 (para vários, separe por vírgula).")
+        print(f"Exemplo: {names[0]}={names[1]}")
+        print(f"Campos deste tipo: {', '.join(names)}")
         while True:
-            raw = Ui.ask(" Aceitar a troca sugerida? (n = pular este tipo, "
-                         "ou digite os pares: A=B, C=D)", "ok")
-            if raw.lower() in ("ok", "s", "sim", "y", "yes"):
-                return pairs
-            if raw.lower() in ("n", "nao", "não"):
+            raw = input("Pares (ou 0 para pular este tipo): ").strip()
+            if raw == "0":
                 return None
             custom = self.parse_pairs(raw, names)
             if custom:
                 return custom
-            print(f" Pares inválidos. Use nomes de campos deste tipo: {', '.join(names)}")
+            print(f"  Pares inválidos. Use só nomes de campos deste tipo: {', '.join(names)}")
 
     # ---- aplicação ----
     def apply(self, plan):
@@ -1093,13 +1309,13 @@ class CardReverser:
                 plan.append((nt, pairs))
         if not plan:
             return 0
-        print("\n=== Inversão de cartões ===")
+        print("\n=== Resumo: o que vai ser invertido ===")
         for nt, pairs in plan:
             print(f" {nt['name']} ({self.counts[nt['id']]} notas, "
-                  f"{len(nt['tmpls'])} template(s)):")
+                  f"{len(nt['tmpls'])} modelo(s) de cartão):")
             for a, b in pairs:
                 print(f"   {a}  <->  {b}")
-        if not Ui.yes("\nAplicar?", "s"):
+        if not Ui.yes("\nQuer inverter esses cartões?", "s"):
             return 0
         return self.apply(plan)
 
@@ -1111,6 +1327,11 @@ class ReverseApp:
         Ui.auto = opts.yes
 
     def run(self):
+        if not Ui.auto:
+            print("\n=== Inverter os cartões ===")
+            print("O que hoje aparece na FRENTE do cartão passa para o VERSO, e vice-versa.")
+            print("O texto das suas notas não muda: só muda o jeito de mostrar.")
+            print("Se rodar de novo no arquivo novo, tudo volta ao que era.")
         src, out = ask_paths(self.opts, suffix="_reversed")
         anki = AnkiCollection(src)
         anki.import_package()
@@ -1130,7 +1351,7 @@ class InfoApp:
     def run(self):
         anki = AnkiCollection(ask_input(self.opts))
         anki.import_package()
-        print("\n=== Tipos de nota ===")
+        print("\n=== Tipos de nota (os modelos dos seus cartões) ===")
         for nt in sorted(anki.notetypes(), key=lambda nt: nt["name"].lower()):
             n = anki.note_count(nt["id"])
             if n == 0:
@@ -1154,10 +1375,14 @@ class InfoApp:
 # Linha de comando
 # ======================================================================
 COMMANDS = ("translate", "reverse", "info", "langs")
-MENU = {"1": ("translate", "Traduzir baralho (serviço de tradução)"),
-        "2": ("reverse", "Inverter cartões (frente <-> verso)"),
-        "3": ("info", "Ver informações do baralho (tipos de nota, campos, baralhos)"),
-        "0": ("exit", "Sair")}
+MENU = {"1": ("translate", "Traduzir um baralho",
+              "Troca o idioma do texto dos cartões (ex.: de italiano para português). Usa o DeepL."),
+        "2": ("reverse", "Inverter os cartões (frente <-> verso)",
+              "O que aparece na frente passa para o verso, e vice-versa. O texto não muda."),
+        "3": ("info", "Ver o que tem dentro de um baralho",
+              "Só mostra informações (tipos de nota, campos, baralhos). Não cria nenhum arquivo."),
+        "0": ("exit", "Sair", None)}
+BACK_TO_MENU = "\nQuer fazer mais alguma coisa?\n  (s = voltar ao menu principal, n = fechar o programa)"
 
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1251,37 +1476,37 @@ def main(argv=None):
         try:
             opts = parse_args(argv)
             if getattr(opts, "command", None) is None:
-                options = {k: v[1] for k, v in MENU.items()}
-                key = Ui.choose("O que deseja fazer?", options, "1")
+                options = {k: (v[1], v[2]) for k, v in MENU.items()}
+                key = Ui.choose("O que você quer fazer?", options, "1")
                 if key == "0":
                     break
                 opts = parse_args([MENU[key][0]])
 
             Ui.auto = getattr(opts, "yes", False)
-            
+
             if opts.command == "reverse":
                 ReverseApp(opts).run()
             elif opts.command == "info":
                 InfoApp(opts).run()
             elif opts.command == "langs":
-                Ui.show_langs("Idiomas de saída disponíveis (código nome):",
+                Ui.show_langs("Idiomas de saída disponíveis (código e nome):",
                               choose_provider(opts).target_langs)
             elif opts.command != "exit":
                 AnkiTranslatorApp(opts).run()
 
-            if Ui.auto or not Ui.yes("\nDeseja voltar ao menu principal?", "s"):
+            if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
                 break
             argv = []  # Reseta os argumentos para forçar o menu interativo na próxima iteração
 
         except SystemExit as e:
             if str(e) and str(e) != "0":
                 print(f"\n[Aviso] {e}")
-            if Ui.auto or not Ui.yes("\nOperação interrompida. Deseja voltar ao menu principal?", "s"):
+            if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
                 break
             argv = []
         except Exception as e:
             print(f"\n[Erro Inesperado] {e}")
-            if Ui.auto or not Ui.yes("\nDeseja voltar ao menu principal?", "s"):
+            if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
                 break
             argv = []
 

@@ -27,6 +27,11 @@ class TranslationCache:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 bak = self.path.with_name(self.path.name + ".bak")
+                # Rotate so a second corruption does not overwrite the previous backup.
+                i = 1
+                while bak.exists():
+                    bak = self.path.with_name(f"{self.path.name}.bak{i}")
+                    i += 1
                 self.path.replace(bak)
                 self.rep.log(f"cache.json was unreadable; saved a copy as {bak.name} and started a new one")
                 data = {}
@@ -41,6 +46,7 @@ class TranslationCache:
                 if len(parts) == 3 and parts[0] in self.valid_target_codes:
                     data["trans"].setdefault(parts[0], {})[parts[2]] = v
                     migrated += 1
+            data["lang"] = old.get("lang", {}) if isinstance(old.get("lang"), dict) else {}
             self.rep.log(f"old cache converted: {migrated} translations kept")
             ver = 2
         if ver == 2:                            # v2: original text as key, unknown source

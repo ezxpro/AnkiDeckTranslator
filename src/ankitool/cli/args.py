@@ -1,5 +1,6 @@
 from pathlib import Path
 import argparse
+import re
 import sys
 
 from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
@@ -146,7 +147,7 @@ def parse_args(argv=None):
     elif opts.command == "reverse":
         seen = set()
         for item in opts.swap or []:
-            parts = [x.strip().lower() for x in item.split("=")]
+            parts = [x.strip().lower() for x in re.split(r"<->|=", item)]
             if len(parts) != 2 or not all(parts) or parts[0] == parts[1] or seen & set(parts):
                 r.error(f"--swap invalid: '{item}'. Use FIELD1=FIELD2, without repeating fields")
             seen.update(parts)

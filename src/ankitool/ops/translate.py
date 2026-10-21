@@ -107,9 +107,11 @@ class FieldTranslator:
                 for src, r in zip(chunk, res):
                     out = r.text
                     ok = TextTools.PROT.findall(out) == TextTools.PROT.findall(src)
-                    if not ok:
+                    if ok:
+                        self.cache.put(T, L, src, out)
+                    else:
+                        # não grava no cache: o texto fica sem tradução salva e é retraduzido na próxima rodada
                         self.rep.warn(" tag danificada, mantido original:", TextTools.plain(src)[:50])
-                    self.cache.put(T, L, src, out if ok else src)
                 self.cache.save()
                 self.rep.log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
         return est

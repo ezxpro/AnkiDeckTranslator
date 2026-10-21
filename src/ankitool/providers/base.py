@@ -31,7 +31,7 @@ def load_secret(env_name, label):
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 name, value = line.split("=", 1)
-                if name.replace("export", "").strip() == env_name:
+                if name.removeprefix("export ").strip() == env_name:
                     key = value.strip().strip('"').strip("'")
                     break
     if not key:

@@ -1710,7 +1710,7 @@ def main(argv=None):
                 key = Ui.choose("O que você quer fazer?", options, "1")
                 if key == "0":
                     break
-                opts = parse_args([MENU[key][0]])
+                opts = parse_args([MgENU[key][0]])
 
             Ui.auto = getattr(opts, "yes", False)
 

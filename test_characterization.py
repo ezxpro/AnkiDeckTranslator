@@ -2,7 +2,7 @@ import json, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import anki_translator as at          # ajuste para o nome real do arquivo
+import AnkiTranslator as at          # ajuste para o nome real do arquivo
 
 
 def test_parse_numbers():

@@ -27,6 +27,75 @@ class ProviderUnavailable(AnkiToolError):
 class Cancelled(AnkiToolError):
     """A operação foi cancelada."""
 
+class CancelToken:
+    def __init__(self):
+        self._ev = threading.Event()
+
+    def cancel(self):
+        self._ev.set()
+
+    @property
+    def cancelled(self):
+        return self._ev.is_set()
+
+class Reporter:
+    """Canal de feedback do núcleo. Esta base é silenciosa (ideal para uso como biblioteca);
+    a CLI usa ConsoleReporter e a GUI terá o seu."""
+
+    def __init__(self, cancel=None):
+        self.cancel = cancel or CancelToken()
+
+    def log(self, *a): pass
+    def warn(self, *a): pass
+    def advance(self, label, done, total): pass
+
+    def check_cancelled(self):
+        if self.cancel.cancelled:
+            raise Cancelled("Cancelado.")
+
+def track(rep, items, label):
+    """Percorre 'items' avisando o Reporter do andamento (e respeitando o cancelamento)."""
+    total = len(items)
+    for i, x in enumerate(items, 1):
+        rep.check_cancelled()
+        yield x
+        rep.advance(label, i, total)
+
+class ConsoleReporter(Reporter):
+    def __init__(self, quiet=False, cancel=None):
+        super().__init__(cancel)
+        self.quiet = quiet
+        self._last, self._next = {}, {}
+
+    def log(self, *a):
+        if not self.quiet:
+            print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+    def warn(self, *a):                                   # aparece mesmo com --quiet
+        print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
+
+    def advance(self, label, done, total):
+        if self.quiet or not total:
+            return
+        if sys.stdout.isatty():
+            now = time.time()
+            if now - self._last.get(label, 0.0) >= 0.2 or done == total:
+                print(f"\r{time.strftime('%H:%M:%S')} {label}: {done}/{total} "
+                      f"({done * 100 // total}%)", end="", flush=True)
+                self._last[label] = now
+            if done == total:
+                print()
+        else:
+            nxt = self._next.get(label, 0.1)
+            if done / total >= nxt or done == total:
+                self.log(f"{label}: {done}/{total} ({done * 100 // total}%)")
+                while nxt <= done / total:
+                    nxt += 0.1
+            self._next[label] = nxt
+        if done == total:
+            self._last.pop(label, None)
+            self._next.pop(label, None)
+
 # ======================================================================
 # Utilitários de console
 # ======================================================================
@@ -35,17 +104,6 @@ class Ui:
     Com Ui.auto = True (opção --yes), nenhuma pergunta é feita: vale o valor padrão."""
 
     auto = False
-    quiet = False                                      # --quiet: sem mensagens de andamento
-
-    @staticmethod
-    def log(*a):
-        if not Ui.quiet:
-            print(time.strftime("%H:%M:%S"), *a, flush=True)
-
-    @staticmethod
-    def warn(*a):
-        """Avisos importantes: aparecem mesmo com --quiet (vão para o stderr)."""
-        print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
 
     @staticmethod
     def ask(msg, default):
@@ -175,32 +233,7 @@ class Ui:
             print(f"{left:<40}{right}")
         print()
 
-    @staticmethod
-    def progress(items, label, total=None):
-        """Percorre 'items' mostrando andamento. Em terminal atualiza a mesma linha;
-        com saída redirecionada (log/arquivo) imprime a cada 10%."""
-        total = len(items) if total is None else total
-        if Ui.quiet:
-            yield from items
-            return
-        tty = sys.stdout.isatty()
-        last, nxt = 0.0, 0.1
-        for i, x in enumerate(items, 1):
-            yield x
-            if tty:
-                now = time.time()
-                if now - last >= 0.2 or i == total:
-                    print(f"\r{time.strftime('%H:%M:%S')} {label}: {i}/{total} ({i * 100 // total}%)",
-                          end="", flush=True)
-                    last = now
-            elif i / total >= nxt or i == total:
-                Ui.log(f"{label}: {i}/{total} ({i * 100 // total}%)")
-                while nxt <= i / total:
-                    nxt += 0.1
-        if tty and total:
-            print()
 
-log = Ui.log
 
 # ======================================================================
 # Seletor de arquivos (em texto)
@@ -303,24 +336,23 @@ def pick_file(start=None, suffix=".apkg"):
 class Heartbeat:
     """Para chamadas longas sem progresso interno (importar/exportar):
     mostra 'ainda trabalhando... Ns' a cada poucos segundos."""
-
-    def __init__(self, msg, every=5):
-        self.msg, self.every = msg, every
+    def __init__(self, rep, msg, every=5):
+        self.rep, self.msg, self.every = rep, msg, every
 
     def __enter__(self):
         self.t0, self.stop = time.time(), threading.Event()
-        log(self.msg + "...")
+        self.rep.log(self.msg + "...")
         threading.Thread(target=self._run, daemon=True).start()
         return self
 
     def _run(self):
         while not self.stop.wait(self.every):
-            log(f"  {self.msg}... {int(time.time() - self.t0)}s")
+            self.rep.log(f"  {self.msg}... {int(time.time() - self.t0)}s")
 
     def __exit__(self, exc_type, *rest):
         self.stop.set()
         if exc_type is None:
-            log(f"{self.msg}: concluído em {time.time() - self.t0:.1f}s")
+            self.rep.log(f"{self.msg}: concluído em {time.time() - self.t0:.1f}s")
         return False
 
 # ======================================================================
@@ -534,9 +566,10 @@ class TranslationCache:
 
     VERSION = 3
 
-    def __init__(self, path, valid_target_codes):
+    def __init__(self, path, valid_target_codes, rep=None):
         self.path = path
         self.valid_target_codes = valid_target_codes
+        self.rep = rep or Reporter()                     # antes de _load(), que usa self.rep
         data = self._load()
         self.trans = data["trans"]
         self.lang = data["lang"]
@@ -549,7 +582,7 @@ class TranslationCache:
             except (OSError, ValueError):
                 bak = self.path.with_name(self.path.name + ".bak")
                 self.path.replace(bak)
-                log(f"cache.json estava ilegível; guardei uma cópia em {bak.name} e comecei um novo")
+                self.rep.log(f"cache.json estava ilegível; guardei uma cópia em {bak.name} e comecei um novo")
                 data = {}
         if not isinstance(data, dict):
             data = {}
@@ -562,7 +595,7 @@ class TranslationCache:
                 if len(parts) == 3 and parts[0] in self.valid_target_codes:
                     data["trans"].setdefault(parts[0], {})[parts[2]] = v
                     migrated += 1
-            log(f"cache antigo convertido: {migrated} traduções aproveitadas")
+            self.rep.log(f"cache antigo convertido: {migrated} traduções aproveitadas")
             ver = 2
         if ver == 2:                            # v2: texto original como chave, origem desconhecida
             trans, migrated = {}, 0
@@ -570,8 +603,8 @@ class TranslationCache:
                 trans[t_code] = {"?": {h(t): out for t, out in d.items()}}
                 migrated += len(d)
             data = {"trans": trans}
-            log(f"cache v2 convertido para hashes: {migrated} traduções aproveitadas "
-                f"(origem desconhecida, ficam em '?')")
+            self.rep.log(f"cache v2 convertido para hashes: {migrated} traduções aproveitadas "
+                         f"(origem desconhecida, ficam em '?')")
         return {"trans": data.get("trans", {}), "lang": data.get("lang", {})}
 
     def save(self):
@@ -598,8 +631,9 @@ class DeckNameCache:
     """deck_cache.json, separado do cache.json. Só a saída bruta do serviço é gravada;
     nomes digitados à mão nunca vão para o cache."""
 
-    def __init__(self, path):
+    def __init__(self, path, rep=None):
         self.path = path
+        self.rep = rep or Reporter()
         self.data = self._load()
 
     def _load(self):
@@ -612,7 +646,7 @@ class DeckNameCache:
         except (OSError, ValueError, AttributeError):
             bak = self.path.with_name(self.path.name + ".bak")
             self.path.replace(bak)
-            log(f"deck_cache.json estava ilegível; guardei uma cópia em {bak.name}")
+            self.rep.log(f"deck_cache.json estava ilegível; guardei uma cópia em {bak.name}")
         return {"version": 1, "names": {}}
 
     def bucket(self, target, src_lang):
@@ -629,7 +663,8 @@ class DeckNameCache:
 class AnkiCollection:
     """Importa o .apkg, expõe notas/campos, aplica traduções e exporta."""
 
-    def __init__(self, src, keep_scheduling=False, legacy=True):
+    def __init__(self, src, keep_scheduling=False, legacy=True, rep=None):
+        self.rep = rep or Reporter()
         self.src = Path(src)
         self.keep_scheduling, self.legacy = keep_scheduling, legacy
         self.col = None
@@ -638,17 +673,17 @@ class AnkiCollection:
         self.field_values = collections.defaultdict(list)      # (mid, campo) -> valores com texto
 
     def import_package(self):
-        log(f"importando {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
+        self.rep.log(f"importando {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
         db_path = Path(tempfile.mkdtemp()) / "collection.anki2"
         self.col = Collection(str(db_path))
-        with Heartbeat("importando baralho"):
+        with Heartbeat(self.rep, "importando baralho"):
             self.col.import_anki_package(ImportAnkiPackageRequest(
                 package_path=str(self.src), options=ImportAnkiPackageOptions(
                     with_scheduling=self.keep_scheduling,
                     with_deck_configs=self.keep_scheduling)))
 
     def load_notes(self):
-        for nid in Ui.progress(self.col.find_notes(""), "carregando notas"):
+        for nid in track(self.rep, self.col.find_notes(""), "carregando notas"):
             n = self.col.get_note(nid)
             self.notes.append(n)
             if n.mid not in self.model_names:
@@ -656,7 +691,7 @@ class AnkiCollection:
             for f, v in n.items():
                 if len(TextTools.plain(v)) >= 3:
                     self.field_values[(n.mid, f)].append(v)
-        log("notas:", len(self.notes))
+        self.rep.log("notas:", len(self.notes))
 
     def filter_fields(self, only, skip):
         """Tira de field_values os campos que não devem ser traduzidos (--field / --skip-field).
@@ -674,7 +709,7 @@ class AnkiCollection:
         return unmatched
 
     def apply_translations(self, chosen, cache):
-        for n in Ui.progress(self.notes, "aplicando traduções"):
+        for n in track(self.rep, self.notes, "aplicando traduções"):
             changed = False
             for f, v in n.items():
                 c = chosen.get((n.mid, f))
@@ -697,7 +732,7 @@ class AnkiCollection:
         return len(self.col.find_notes(f"mid:{mid}"))
 
     def export(self, out_path):
-        with Heartbeat("exportando"):
+        with Heartbeat(self.rep, "exportando"):
             self.col.export_anki_package(out_path=str(out_path), options=ExportAnkiPackageOptions(
                 with_scheduling=self.keep_scheduling, with_deck_configs=self.keep_scheduling,
                 with_media=True, legacy=self.legacy),
@@ -716,14 +751,16 @@ class FieldLanguageDetector:
     textos já detectados antes não são reenviados. A amostra prioriza textos conhecidos,
     então só textos realmente novos gastam caracteres."""
 
-    def __init__(self, client, cache, target, sample=SAMPLE):
+    def __init__(self, client, cache, target, rep, sample=SAMPLE):
         self.client, self.cache, self.target, self.sample = client, cache, target, sample
+        self.rep = rep
 
     def detect(self, field_values):
         lang_cache = self.cache.lang
         detected = {}                                    # (mid, campo) -> (idioma, proporção, exemplo)
         sent = reused = 0
         for key, vs in field_values.items():
+            self.rep.check_cancelled()
             uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs))
             known = [p for p in uniq if h(p) in lang_cache]
             unknown = [p for p in uniq if h(p) not in lang_cache]
@@ -731,7 +768,7 @@ class FieldLanguageDetector:
             fresh = random.sample(unknown, min(max(self.sample - len(pick), 0), len(unknown)))
             if fresh:
                 if sent == 0:
-                    log(f"detectando o idioma dos campos (amostra de até {self.sample} textos cada)...")
+                    self.rep.log(f"detectando o idioma dos campos (amostra de até {self.sample} textos cada)...")
                 langs = self.client.detect(fresh, self.target)
                 if langs is None:
                     raise ProviderUnavailable(f"{self.client.label} fora do ar; rode de novo "
@@ -747,9 +784,9 @@ class FieldLanguageDetector:
 
         if sent:
             self.cache.save()
-            log(f"detecção de idioma: {sent} textos enviados, {reused} reaproveitados do cache")
+            self.rep.log(f"detecção de idioma: {sent} textos enviados, {reused} reaproveitados do cache")
         else:
-            log("idiomas já detectados antes (cache): nenhum caractere gasto na detecção")
+            self.rep.log("idiomas já detectados antes (cache): nenhum caractere gasto na detecção")
         return detected
 
 # ======================================================================
@@ -758,8 +795,8 @@ class FieldLanguageDetector:
 class FieldTranslator:
     """Traduz os campos escolhidos (cache por saída + origem + hash do texto)."""
 
-    def __init__(self, client, cache):
-        self.client, self.cache = client, cache
+    def __init__(self, client, cache, rep):
+        self.client, self.cache, self.rep = client, cache, rep
 
     def translate(self, chosen, field_values, dry_run=False):
         todo = collections.defaultdict(list)             # (origem, saída) -> textos
@@ -772,7 +809,7 @@ class FieldTranslator:
                     queued.add((L, T, v))
                     todo[(L, T)].append(v)
         chars = sum(len(self.client.mask(v)) for (_, _, v) in queued)
-        log(f"a traduzir: {len(queued)} textos (~{chars} caracteres); "
+        self.rep.log(f"a traduzir: {len(queued)} textos (~{chars} caracteres); "
             f"já estavam no cache (sem custo): {len(cached)}")
 
         if dry_run:
@@ -788,6 +825,7 @@ class FieldTranslator:
             texts = sorted(texts)
             step = self.client.batch_size
             for i in range(0, len(texts), step):
+                self.rep.check_cancelled()
                 chunk = texts[i:i + step]
                 res = self.client.translate(chunk, target_lang=T, source_lang=L,
                                             protect_tags=True)
@@ -798,10 +836,10 @@ class FieldTranslator:
                     out = r.text
                     ok = TextTools.PROT.findall(out) == TextTools.PROT.findall(src)
                     if not ok:
-                        Ui.warn(" tag danificada, mantido original:", TextTools.plain(src)[:50])
+                        self.rep.warn(" tag danificada, mantido original:", TextTools.plain(src)[:50])
                     self.cache.put(T, L, src, out if ok else src)
                 self.cache.save()
-                log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
+                self.rep.log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
 
 # ======================================================================
 # Renomear baralhos
@@ -811,7 +849,8 @@ class DeckRenamer:
     Baralhos principais são os de primeiro nível; baralhos secundários são os que
     ficam dentro de outro baralho (separados por '::')."""
 
-    def __init__(self, anki, client, target, picked, cache, opts):
+    def __init__(self, anki, client, target, picked, cache, opts, rep):
+        self.rep = rep
         self.opts = opts
         self.anki, self.client = anki, client
         self.target, self.tbase = target, lang_base(target)
@@ -854,14 +893,14 @@ class DeckRenamer:
     def auto_names(self, segments, src_lang):
         bucket = self.cache.bucket(self.target, src_lang)
         pending = sorted(s for s in segments if s not in bucket)
-        log(f"nomes de baralhos: {len(pending)} a traduzir "
+        self.rep.log(f"nomes de baralhos: {len(pending)} a traduzir "
             f"({len(segments) - len(pending)} já no cache)")
         step = self.client.batch_size
         for i in range(0, len(pending), step):
             chunk = pending[i:i + step]
             res = self.client.translate(chunk, target_lang=self.target, source_lang=src_lang)
             if res is None:
-                Ui.warn(f"{self.client.label} fora do ar; nomes restantes ficam como estão")
+                self.rep.warn(f"{self.client.label} fora do ar; nomes restantes ficam como estão")
                 break
             for s, r in zip(chunk, res):
                 already = lang_base(r.detected_source_lang) == self.tbase  # já no idioma de saída
@@ -939,7 +978,7 @@ class DeckRenamer:
             plan = {did: (old, self.final_name(old, newseg)) for did, old in decks}
             plan = {did: v for did, v in plan.items() if v[0] != v[1]}
             if not plan:
-                log("nenhum nome de baralho mudou")
+                self.rep.log("nenhum nome de baralho mudou")
                 return
 
             print("\n=== Nomes de baralhos: como era  ->  como vai ficar ===")
@@ -975,8 +1014,8 @@ class DeckRenamer:
                 decks_api.rename(did, new)               # principais antes dos secundários
                 done += 1
             except Exception as e:
-                Ui.warn(f" não consegui renomear '{old}': {e}")
-        log(f"baralhos renomeados: {done}/{len(plan)}")
+                self.rep.warn(f" não consegui renomear '{old}': {e}")
+        self.rep.log(f"baralhos renomeados: {done}/{len(plan)}")
 
 # ======================================================================
 # Aplicação
@@ -987,6 +1026,7 @@ class AnkiTranslatorApp:
     def __init__(self, opts):
         self.opts = opts
         Ui.auto = opts.yes
+        self.rep = ConsoleReporter(quiet=opts.quiet)
         global CACHE_DIR
         if opts.cache_dir:
             CACHE_DIR = Path(opts.cache_dir).expanduser().resolve()
@@ -995,11 +1035,12 @@ class AnkiTranslatorApp:
         self.client = choose_provider(opts)
         usage = self.client.usage()
         if usage is not None:
-            log(f"uso atual {self.client.label}:", usage)
-        self.cache = TranslationCache(self.client.cache_file("cache"), self.client.target_codes)
-        self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache"))
-        log(f"cache: {self.cache.count()} traduções e {len(self.cache.lang)} idiomas "
-            f"de texto guardados em {self.cache.path}")
+            self.rep.log(f"uso atual {self.client.label}:", usage)
+        self.cache = TranslationCache(self.client.cache_file("cache"),
+                                      self.client.target_codes, self.rep)
+        self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache"), self.rep)
+        self.rep.log(f"cache: {self.cache.count()} traduções e {len(self.cache.lang)} idiomas "
+                     f"de texto guardados em {self.cache.path}")
         self.anki = None
         self.target = self.tbase = None
 
@@ -1093,7 +1134,7 @@ class AnkiTranslatorApp:
             src, out = self.ask_paths()
         self.ask_target()
 
-        self.anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy)
+        self.anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy, self.rep)
         try:
             self.anki.import_package()
             self.anki.load_notes()
@@ -1101,14 +1142,14 @@ class AnkiTranslatorApp:
             if self.opts.only_fields or self.opts.skip_fields:
                 before = len(self.anki.field_values)
                 for nt, fld in self.anki.filter_fields(self.opts.only_fields, self.opts.skip_fields):
-                    Ui.warn(f"--field '{(nt + ':') if nt else ''}{fld}' não corresponde a nenhum campo")
-                log(f"campos considerados: {len(self.anki.field_values)} de {before} "
-                    f"(por --field / --skip-field)")
+                    self.rep.warn(f"--field '{(nt + ':') if nt else ''}{fld}' não corresponde a nenhum campo")
+                self.rep.log(f"campos considerados: {len(self.anki.field_values)} de {before} "
+                             f"(por --field / --skip-field)")
                 if not self.anki.field_values:
                     raise ConfigError("Nenhum campo sobrou depois de --field/--skip-field. "
                                       "Use o comando 'info' para ver os nomes dos campos.")
 
-            detector = FieldLanguageDetector(self.client, self.cache, self.target,
+            detector = FieldLanguageDetector(self.client, self.cache, self.target, self.rep,
                                              sample=self.sample)
             detected = detector.detect(self.anki.field_values)
             self.show_detected(detected)
@@ -1116,11 +1157,11 @@ class AnkiTranslatorApp:
             picked = self.ask_languages(detected)
             chosen = {k: (lang, self.target) for k, (lang, ratio, _) in detected.items()
                       if lang in picked and ratio >= self.min_ratio}
-            log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
+            self.rep.log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
 
             dry = self.opts.dry_run
-            FieldTranslator(self.client, self.cache).translate(chosen, self.anki.field_values,
-                                                               dry_run=dry)
+            FieldTranslator(self.client, self.cache, self.rep).translate(
+                chosen, self.anki.field_values, dry_run=dry)
             if dry:
                 usage = self.client.usage()
                 if usage is not None:
@@ -1131,13 +1172,13 @@ class AnkiTranslatorApp:
             self.anki.apply_translations(chosen, self.cache)
 
             DeckRenamer(self.anki, self.client, self.target, picked, self.deck_cache,
-                        self.opts).run()
+                        self.opts, self.rep).run()
 
             self.anki.export(out)
             print("pronto ->", out)
             usage = self.client.usage()
             if usage is not None:
-                log(f"uso {self.client.label} ao final:", usage)
+                self.rep.log(f"uso {self.client.label} ao final:", usage)
         finally:
             self.anki.close()
 # ======================================================================
@@ -1197,8 +1238,8 @@ class CardReverser:
     REF = re.compile(r"\{\{([#^/]?)((?:[^{}:]*:)*)([^{}:]+)\}\}")
     STANDARD = 0                                         # no Anki, cloze é 1
 
-    def __init__(self, anki, opts):
-        self.anki, self.opts = anki, opts
+    def __init__(self, anki, opts, rep):
+        self.anki, self.opts, self.rep = anki, opts, rep
         self.counts = {}                                 # id do tipo de nota -> nº de notas
 
     # ---- templates ----
@@ -1286,7 +1327,7 @@ class CardReverser:
             else:
                 skipped += 1
         if skipped:
-            log(f"tipos de nota ignorados (cloze ou com menos de 2 campos): {skipped}")
+            self.rep.log(f"tipos de nota ignorados (cloze ou com menos de 2 campos): {skipped}")
         return sorted(out, key=lambda nt: nt["name"].lower())
 
     def pick_notetypes(self, cands):
@@ -1327,7 +1368,7 @@ class CardReverser:
         if self.opts.swap:
             pairs = self.parse_pairs(",".join(self.opts.swap), names)
             if not pairs:
-                Ui.warn(f" {nt['name']}: não tem os campos de --swap; ignorado")
+                self.rep.warn(f" {nt['name']}: não tem os campos de --swap; ignorado")
             return pairs
         pairs = self.suggest_pairs(nt)
         if Ui.auto or len(names) == 2:                    # com 2 campos não há o que escolher
@@ -1370,18 +1411,18 @@ class CardReverser:
                 changed |= (q != t["qfmt"] or ans != t["afmt"])
                 t["qfmt"], t["afmt"] = q, ans
             if not changed:
-                log(f" {nt['name']}: nenhum template usa os campos escolhidos; ignorado")
+                self.rep.log(f" {nt['name']}: nenhum template usa os campos escolhidos; ignorado")
                 continue
             save(nt)
             done += 1
-        log(f"tipos de nota invertidos: {done}/{len(plan)}")
+        self.rep.log(f"tipos de nota invertidos: {done}/{len(plan)}")
         return done
 
     def run(self):
         """Devolve quantos tipos de nota foram invertidos."""
         cands = self.eligible()
         if not cands:
-            log("nenhum tipo de nota com frente e verso para inverter")
+            self.rep.log("nenhum tipo de nota com frente e verso para inverter")
             return 0
         plan = []
         for nt in self.pick_notetypes(cands):
@@ -1414,10 +1455,11 @@ class ReverseApp:
             print("O texto das suas notas não muda: só muda o jeito de mostrar.")
             print("Se rodar de novo no arquivo novo, tudo volta ao que era.")
         src, out = ask_paths(self.opts, suffix="_reversed")
-        anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy)
+        rep = ConsoleReporter(quiet=self.opts.quiet)
+        anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy, rep)
         try:
             anki.import_package()
-            if not CardReverser(anki, self.opts).run():
+            if not CardReverser(anki, self.opts, rep).run():
                 raise AnkiToolError("Nada foi invertido; nenhum arquivo gerado.")
             anki.export(out)
             print("pronto ->", out)
@@ -1431,7 +1473,7 @@ class InfoApp:
         self.opts = opts
 
     def run(self):
-        anki = AnkiCollection(ask_input(self.opts))
+        anki = AnkiCollection(ask_input(self.opts), rep=ConsoleReporter(quiet=self.opts.quiet))
         try:
             anki.import_package()
             print("\n=== Tipos de nota (os modelos dos seus cartões) ===")
@@ -1632,7 +1674,6 @@ def main(argv=None):
                 opts = parse_args([MENU[key][0]])
 
             Ui.auto = getattr(opts, "yes", False)
-            Ui.quiet = getattr(opts, "quiet", False)
 
             if opts.command == "reverse":
                 ReverseApp(opts).run()

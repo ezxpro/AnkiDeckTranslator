@@ -27,4 +27,4 @@ h = TextTools.h
 
 def lang_base(code):
     """'pt-BR' / 'PT_br' / 'PT' -> 'PT': compares languages ignoring region and case."""
-    return re.split(r"[-_]", (code or "").upper())[0]
+    return next((p for p in re.split(r"[-_]", (code or "").upper()) if p), "")

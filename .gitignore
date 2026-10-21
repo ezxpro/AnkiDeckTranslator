@@ -1,6 +1,6 @@
 # Translation cache (contains your card content)
-cache.json
-deck_cache.json
+cache*.json
+deck_cache*.json
 .tmp
 .bak
 

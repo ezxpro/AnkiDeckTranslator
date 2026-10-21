@@ -37,6 +37,23 @@ class ReverseConfig:
     notetypes: list = None           # nomes de tipos de nota, ou None = todos/perguntar
     swap: list = None                # ["Campo1=Campo2", ...]
 
+@dataclass
+class TranslateConfig:
+    target: str                                          # já validado (client.resolve_target)
+    sample: int = SAMPLE
+    min_ratio: float = MIN_RATIO
+    only_fields: list = field(default_factory=list)      # [(tipo_de_nota|None, campo)]
+    skip_fields: list = field(default_factory=list)
+    keep_scheduling: bool = False
+    legacy: bool = True
+
+@dataclass
+class Estimate:
+    texts: int
+    chars: int
+    cached: int
+    by_pair: dict                                        # (origem, saída) -> nº de textos
+
 class CancelToken:
     def __init__(self):
         self._ev = threading.Event()
@@ -461,6 +478,7 @@ class TranslationProvider(ABC):
     retries = 3
     transient_errors = (ConnectionError, TimeoutError)   # erros que valem nova tentativa
     cache_tag = None                           # None -> "_<name>" nos nomes dos arquivos de cache
+    hidden = False                             # True: só vale com --provider, fora do menu
 
     def __init__(self, key=None):
         self.key = key or load_secret(self.key_env, self.label)
@@ -554,11 +572,62 @@ class DeepLProvider(TranslationProvider):
                                      tag_handling="html" if html else None)
         return [TranslationResult(r.text, r.detected_source_lang) for r in res]
 
+@register_provider
+class FakeProvider(TranslationProvider):
+    """Serviço de MENTIRA, só para testar o programa sem gastar caracteres de serviço nenhum.
+    Uso: --provider fake. Não precisa de chave nem de internet. A "tradução" só põe o código
+    do idioma na frente do texto, e o idioma é adivinhado por uma lista mínima de palavras
+    comuns (serve para testar o fluxo, não a qualidade). usage() mostra quantos caracteres
+    esta execução TERIA gasto num serviço real."""
+
+    name, label, key_env = "fake", "Fake (teste, sem custo)", "FAKE_KEY"
+    hidden = True
+    STOP = {"IT": {"il", "lo", "la", "gli", "le", "di", "che", "è", "per", "un", "una", "non",
+                   "sono", "del", "della", "mi", "ho", "con", "ma", "più", "vado", "poi",
+                   "al", "dal", "nel", "questo", "fa", "viene"},
+            "EN": {"the", "of", "and", "to", "is", "in", "you", "he", "she", "it", "for",
+                   "with", "was", "are", "my", "his", "her", "this", "that", "on", "have"},
+            "PT": {"o", "os", "as", "da", "do", "uma", "não", "são", "um", "para", "com",
+                   "você", "eu", "ele", "ela", "está", "muito", "mais", "isso", "que"}}
+
+    def __init__(self):
+        self.chars = 0                                   # caracteres "gastos" nesta execução
+        super().__init__(key="fake")
+
+    def connect(self, key):
+        pass
+
+    def fetch_target_languages(self):
+        return [Language(c, n) for c, n in (("PT-BR", "Portuguese (Brazilian)"),
+                ("EN-US", "English (American)"), ("IT", "Italian"), ("ES", "Spanish"))]
+
+    def fetch_source_languages(self):
+        return [Language(c, n) for c, n in (("PT", "Portuguese"), ("EN", "English"),
+                ("IT", "Italian"), ("ES", "Spanish"))]
+
+    def _guess(self, text):
+        words = set(re.findall(r"\w+", TextTools.plain(text).lower()))
+        score = {lang: len(words & stop) for lang, stop in self.STOP.items()}
+        best = max(score, key=score.get)
+        return best if score[best] else "EN"
+
+    def usage(self):
+        return f"{self.chars} caracteres simulados"
+
+    def detect(self, texts, target_lang):
+        self.chars += sum(len(t) for t in texts)
+        return [self._guess(t) for t in texts]
+
+    def _translate(self, texts, target_lang, source_lang, html):
+        self.chars += sum(len(t) for t in texts)
+        return [TranslationResult(f"[{target_lang}] {t}", self._guess(t)) for t in texts]
+
 def choose_provider(opts):
     """Serviço de tradução: --provider, ou pergunta (se houver mais de um), ou o padrão."""
     name = getattr(opts, "provider", None)
-    if not name and len(PROVIDERS) > 1 and not Ui.auto:
-        keys = {str(i): n for i, n in enumerate(sorted(PROVIDERS), 1)}
+    visible = sorted(n for n, c in PROVIDERS.items() if not c.hidden)
+    if not name and len(visible) > 1 and not Ui.auto:
+        keys = {str(i): n for i, n in enumerate(visible, 1)}
         default = next(k for k, n in keys.items() if n == DEFAULT_PROVIDER)
         key = Ui.choose("Qual serviço de tradução você quer usar?",
                         {k: PROVIDERS[n].label for k, n in keys.items()}, default)
@@ -819,17 +888,11 @@ class FieldTranslator:
                     queued.add((L, T, v))
                     todo[(L, T)].append(v)
         chars = sum(len(self.client.mask(v)) for (_, _, v) in queued)
-        self.rep.log(f"a traduzir: {len(queued)} textos (~{chars} caracteres); "
-            f"já estavam no cache (sem custo): {len(cached)}")
-
+        est = Estimate(len(queued), chars, len(cached), {k: len(v) for k, v in todo.items()})
+        self.rep.log(f"a traduzir: {est.texts} textos (~{chars} caracteres); "
+                     f"já estavam no cache (sem custo): {est.cached}")
         if dry_run:
-            print("\n=== Simulação (--dry-run) ===")
-            print(f"Textos que seriam enviados: {len(queued)}")
-            print(f"Caracteres estimados: ~{chars}")
-            print(f"Já no cache (sem custo): {len(cached)}")
-            for (L, T), texts in todo.items():
-                print(f"  {L} -> {T}: {len(texts)} textos")
-            return chars
+            return est
 
         for (L, T), texts in todo.items():
             texts = sorted(texts)
@@ -850,6 +913,76 @@ class FieldTranslator:
                     self.cache.put(T, L, src, out if ok else src)
                 self.cache.save()
                 self.rep.log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
+        return est
+
+class TranslateOperation:
+    """Fluxo de tradução de um baralho, sem perguntas e sem print/input:
+    open -> detect -> plan -> translate -> apply -> export -> close."""
+
+    def __init__(self, client, cache, cfg, rep=None):
+        self.client, self.cache, self.cfg = client, cache, cfg
+        self.rep = rep or Reporter()
+        self.target, self.tbase = cfg.target, lang_base(cfg.target)
+        self.anki = None
+
+    def open(self, src):
+        cfg = self.cfg
+        self.anki = AnkiCollection(src, cfg.keep_scheduling, cfg.legacy, self.rep)
+        self.anki.import_package()
+        self.anki.load_notes()
+        if cfg.only_fields or cfg.skip_fields:
+            before = len(self.anki.field_values)
+            for nt, fld in self.anki.filter_fields(cfg.only_fields, cfg.skip_fields):
+                self.rep.warn(f"--field '{(nt + ':') if nt else ''}{fld}' não corresponde a nenhum campo")
+            self.rep.log(f"campos considerados: {len(self.anki.field_values)} de {before} "
+                         f"(por --field / --skip-field)")
+            if not self.anki.field_values:
+                raise ConfigError("Nenhum campo sobrou depois de --field/--skip-field. "
+                                  "Use o comando 'info' para ver os nomes dos campos.")
+
+    def detect(self):
+        return FieldLanguageDetector(self.client, self.cache, self.target, self.rep,
+                                     sample=self.cfg.sample).detect(self.anki.field_values)
+
+    def language_options(self, detected):
+        """([(código, nº de campos)] que dá para traduzir, nº de campos já no idioma de saída)."""
+        mr = self.cfg.min_ratio
+        counts = collections.Counter(l for (l, r, _) in detected.values()
+                                     if r >= mr and lang_base(l) != self.tbase)
+        already = sum(1 for (l, r, _) in detected.values()
+                      if r >= mr and lang_base(l) == self.tbase)
+        return counts.most_common(), already
+
+    @staticmethod
+    def validate_languages(raw, valid):
+        """'IT,EN' / 'all' / None -> conjunto de códigos; ConfigError se algum não existe."""
+        raw = (raw or "all").upper()
+        if raw == "ALL":
+            return set(valid)
+        picked = {t for t in re.split(r"[,\s;]+", raw) if t}
+        bad = sorted(picked - set(valid))
+        if bad:
+            raise ConfigError(f"Idioma(s) não detectado(s) nos campos: {', '.join(bad)}. "
+                              f"Detectados: {', '.join(valid)}")
+        return picked
+
+    def plan(self, detected, picked):
+        return {k: (lang, self.target) for k, (lang, ratio, _) in detected.items()
+                if lang in picked and ratio >= self.cfg.min_ratio}
+
+    def translate(self, chosen, dry_run=False):
+        return FieldTranslator(self.client, self.cache, self.rep).translate(
+            chosen, self.anki.field_values, dry_run=dry_run)
+
+    def apply(self, chosen):
+        self.anki.apply_translations(chosen, self.cache)
+
+    def export(self, out):
+        self.anki.export(out)
+
+    def close(self):
+        if self.anki:
+            self.anki.close()
 
 # ======================================================================
 # Renomear baralhos
@@ -1082,7 +1215,6 @@ class AnkiTranslatorApp:
         self.cache_dir = (Path(opts.cache_dir).expanduser().resolve()
                           if opts.cache_dir else SCRIPT_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.sample, self.min_ratio = opts.sample, opts.min_ratio
         self.client = choose_provider(opts)
         usage = self.client.usage()
         if usage is not None:
@@ -1092,13 +1224,9 @@ class AnkiTranslatorApp:
         self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache", self.cache_dir), self.rep)
         self.rep.log(f"cache: {self.cache.count()} traduções e {len(self.cache.lang)} idiomas "
                      f"de texto guardados em {self.cache.path}")
-        self.anki = None
-        self.target = self.tbase = None
+        self.target = None
 
     # ---- perguntas ----
-    def ask_paths(self):
-        return ask_paths(self.opts)
-
     def ask_target(self):
         if self.opts.target:
             target = self.client.resolve_target(self.opts.target)
@@ -1118,44 +1246,28 @@ class AnkiTranslatorApp:
                 if target:
                     break
                 print(f"  '{raw}' não é um código da lista. Digite um dos códigos que aparecem acima.")
-        self.target, self.tbase = target, lang_base(target)
+        self.target = target
 
-    def show_detected(self, detected):
+    def show_detected(self, op, detected):
         print("\n=== Idioma que encontrei em cada campo ===")
         print("(Olhei alguns cartões de cada campo e adivinhei o idioma. "
               "A % diz o quanto tenho certeza.)")
         cur = None
         for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0][0]):
             if mid != cur:
-                print(f"\n{self.anki.model_names[mid]}")
+                print(f"\n{op.anki.model_names[mid]}")
                 cur = mid
-            label = lang if ratio >= self.min_ratio else f"{lang}? (incerto)"
+            label = lang if ratio >= op.cfg.min_ratio else f"{lang}? (incerto)"
             print(f" {f}: {label} ({ratio:.0%}) ex.: {ex}")
 
-    def _languages_from_args(self, valid):
-        raw = (self.opts.lang or "all").upper()
-        if raw == "ALL":
-            return set(valid)
-        picked = {t for t in re.split(r"[,\s;]+", raw) if t}
-        bad = sorted(picked - set(valid))
-        if bad:
-            raise ConfigError(f"Idioma(s) não detectado(s) nos campos: {', '.join(bad)}. "
-                              f"Detectados: {', '.join(valid)}")
-        return picked
-
-    def ask_languages(self, detected):
-        counts = collections.Counter(
-            lang for (lang, ratio, _) in detected.values()
-            if ratio >= self.min_ratio and lang_base(lang) != self.tbase)
-        already = sum(1 for (lang, ratio, _) in detected.values()
-                      if ratio >= self.min_ratio and lang_base(lang) == self.tbase)
-        options = counts.most_common()
+    def ask_languages(self, op, detected):
+        options, already = op.language_options(detected)
         if not options:
             raise AnkiToolError("\nNenhum campo em outro idioma para traduzir.")
 
         labels = [f"{code} - {self.client.source_names.get(code, code)} ({c} campos)"
                   for code, c in options]
-        note = (f"({already} campo(s) já estão em {self.tbase} e serão mantidos do jeito que estão; "
+        note = (f"({already} campo(s) já estão em {op.tbase} e serão mantidos do jeito que estão; "
                 f"campos 'incertos' também.)") if already else None
 
         if self.opts.lang or Ui.auto:                    # sem pergunta: --lang, ou todos com --yes
@@ -1164,7 +1276,7 @@ class AnkiTranslatorApp:
                 print(f" {i}) {lab}")
             if note:
                 print(f" {note}")
-            return self._languages_from_args(dict(options))
+            return TranslateOperation.validate_languages(self.opts.lang, dict(options))
 
         intro = ("Estes são os idiomas que encontrei no baralho. Escolha quais você quer traduzir."
                  + (f"\n{note}" if note else ""))
@@ -1177,63 +1289,58 @@ class AnkiTranslatorApp:
             raise Cancelled("Cancelado.")
         return {options[i][0] for i in idx}
 
+    def print_estimate(self, est):
+        print("\n=== Simulação (--dry-run) ===")
+        print(f"Textos que seriam enviados: {est.texts}")
+        print(f"Caracteres estimados: ~{est.chars}")
+        print(f"Já no cache (sem custo): {est.cached}")
+        for (L, T), n in est.by_pair.items():
+            print(f"  {L} -> {T}: {n} textos")
+
     # ---- fluxo ----
     def run(self):
-        if self.opts.dry_run:                            # simulação: não gera arquivo
-            src, out = ask_input(self.opts), None
-        else:
-            src, out = self.ask_paths()
+        opts, dry = self.opts, self.opts.dry_run
+        src, out = (ask_input(opts), None) if dry else ask_paths(opts)   # dry: não gera arquivo
         self.ask_target()
 
-        self.anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy, self.rep)
+        cfg = TranslateConfig(
+            target=self.target, sample=opts.sample, min_ratio=opts.min_ratio,
+            only_fields=opts.only_fields or [], skip_fields=opts.skip_fields or [],
+            keep_scheduling=opts.keep_scheduling, legacy=opts.legacy)
+        op = TranslateOperation(self.client, self.cache, cfg, self.rep)
         try:
-            self.anki.import_package()
-            self.anki.load_notes()
+            op.open(src)
+            detected = op.detect()
+            self.show_detected(op, detected)
 
-            if self.opts.only_fields or self.opts.skip_fields:
-                before = len(self.anki.field_values)
-                for nt, fld in self.anki.filter_fields(self.opts.only_fields, self.opts.skip_fields):
-                    self.rep.warn(f"--field '{(nt + ':') if nt else ''}{fld}' não corresponde a nenhum campo")
-                self.rep.log(f"campos considerados: {len(self.anki.field_values)} de {before} "
-                             f"(por --field / --skip-field)")
-                if not self.anki.field_values:
-                    raise ConfigError("Nenhum campo sobrou depois de --field/--skip-field. "
-                                      "Use o comando 'info' para ver os nomes dos campos.")
-
-            detector = FieldLanguageDetector(self.client, self.cache, self.target, self.rep,
-                                             sample=self.sample)
-            detected = detector.detect(self.anki.field_values)
-            self.show_detected(detected)
-
-            picked = self.ask_languages(detected)
-            chosen = {k: (lang, self.target) for k, (lang, ratio, _) in detected.items()
-                      if lang in picked and ratio >= self.min_ratio}
+            picked = self.ask_languages(op, detected)
+            chosen = op.plan(detected, picked)
             self.rep.log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
 
-            dry = self.opts.dry_run
-            FieldTranslator(self.client, self.cache, self.rep).translate(
-                chosen, self.anki.field_values, dry_run=dry)
+            est = op.translate(chosen, dry_run=dry)
             if dry:
+                self.print_estimate(est)
                 usage = self.client.usage()
                 if usage is not None:
                     print(f"Uso atual do {self.client.label}: {usage}")
                 print("(A detecção de idioma já gastou alguns caracteres.)")
                 print("Nada foi traduzido nem exportado (--dry-run).")
                 return
-            self.anki.apply_translations(chosen, self.cache)
+            op.apply(chosen)
 
             src_lang = next(iter(picked)) if len(picked) == 1 else None
-            renamer = DeckRenamer(self.anki, self.client, self.target, self.deck_cache, self.rep)
-            DeckRenameCli(renamer, RenameConfig(self.opts.rename_decks, self.opts.deck_method,
-                                                self.opts.deck_names)).run(src_lang)
+            renamer = DeckRenamer(op.anki, self.client, self.target, self.deck_cache, self.rep)
+            DeckRenameCli(renamer, RenameConfig(opts.rename_decks, opts.deck_method,
+                                                opts.deck_names)).run(src_lang)
 
-            self.anki.export(out)
+            op.export(out)
             print("pronto ->", out)
             usage = self.client.usage()
             if usage is not None:
                 self.rep.log(f"uso {self.client.label} ao final:", usage)
         finally:
-            self.anki.close()
+            op.close()
+
 # ======================================================================
 # Inverter cartões (comando separado, sem serviço de tradução)
 # ======================================================================

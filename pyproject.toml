@@ -13,6 +13,7 @@ dependencies = ["anki"]
 
 [project.optional-dependencies]
 deepl = ["deepl"]
+gemini = ["google-genai"]
 dev = ["pytest"]
 
 [project.scripts]

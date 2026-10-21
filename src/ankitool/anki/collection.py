@@ -9,7 +9,7 @@ from ankitool.core.text import TextTools
 
 
 class AnkiCollection:
-    """Importa o .apkg, expõe notas/campos, aplica traduções e exporta."""
+    """Imports the .apkg, exposes notes/fields, applies translations and exports."""
 
     def __init__(self, src, keep_scheduling=False, legacy=True, rep=None):
         self.rep = rep or Reporter()
@@ -17,21 +17,21 @@ class AnkiCollection:
         self.keep_scheduling, self.legacy = keep_scheduling, legacy
         self.col = None
         self.notes = []
-        self.model_names = {}                                  # mid -> nome do modelo
-        self.field_values = collections.defaultdict(list)      # (mid, campo) -> valores com texto
+        self.model_names = {}                                  # mid -> note type name
+        self.field_values = collections.defaultdict(list)      # (mid, field) -> values with text
 
     def import_package(self):
-        self.rep.log(f"importando {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
+        self.rep.log(f"importing {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
         db_path = Path(tempfile.mkdtemp()) / "collection.anki2"
         self.col = Collection(str(db_path))
-        with Heartbeat(self.rep, "importando baralho"):
+        with Heartbeat(self.rep, "importing deck"):
             self.col.import_anki_package(ImportAnkiPackageRequest(
                 package_path=str(self.src), options=ImportAnkiPackageOptions(
                     with_scheduling=self.keep_scheduling,
                     with_deck_configs=self.keep_scheduling)))
 
     def load_notes(self):
-        for nid in track(self.rep, self.col.find_notes(""), "carregando notas"):
+        for nid in track(self.rep, self.col.find_notes(""), "loading notes"):
             n = self.col.get_note(nid)
             self.notes.append(n)
             if n.mid not in self.model_names:
@@ -39,11 +39,11 @@ class AnkiCollection:
             for f, v in n.items():
                 if len(TextTools.plain(v)) >= 3:
                     self.field_values[(n.mid, f)].append(v)
-        self.rep.log("notas:", len(self.notes))
+        self.rep.log("notes:", len(self.notes))
 
     def filter_fields(self, only, skip):
-        """Tira de field_values os campos que não devem ser traduzidos (--field / --skip-field).
-        Cada item é (tipo_de_nota ou None, campo). Devolve os itens de 'only' sem correspondência."""
+        """Removes from field_values the fields that must not be translated (--field / --skip-field).
+        Each item is (note type or None, field). Returns the items in 'only' with no match."""
         def match(specs, key):
             mid, f = key
             return any(fld.lower() == f.lower()
@@ -57,7 +57,7 @@ class AnkiCollection:
         return unmatched
 
     def apply_translations(self, chosen, cache):
-        for n in track(self.rep, self.notes, "aplicando traduções"):
+        for n in track(self.rep, self.notes, "applying translations"):
             changed = False
             for f, v in n.items():
                 c = chosen.get((n.mid, f))
@@ -80,7 +80,7 @@ class AnkiCollection:
         return len(self.col.find_notes(f"mid:{mid}"))
 
     def export(self, out_path):
-        with Heartbeat(self.rep, "exportando"):
+        with Heartbeat(self.rep, "exporting"):
             self.col.export_anki_package(out_path=str(out_path), options=ExportAnkiPackageOptions(
                 with_scheduling=self.keep_scheduling, with_deck_configs=self.keep_scheduling,
                 with_media=True, legacy=self.legacy),

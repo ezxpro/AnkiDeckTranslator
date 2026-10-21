@@ -1,8 +1,8 @@
 # Translation cache (contains your card content)
 cache*.json
 deck_cache*.json
-*.tmp
-*.bak
+.tmp
+.bak
 
 # Anki packages
 *.apkg

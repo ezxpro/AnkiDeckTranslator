@@ -6,13 +6,13 @@ from ankitool.providers.base import Language, TranslationProvider, TranslationRe
 
 @register_provider
 class FakeProvider(TranslationProvider):
-    """Serviço de MENTIRA, só para testar o programa sem gastar caracteres de serviço nenhum.
-    Uso: --provider fake. Não precisa de chave nem de internet. A "tradução" só põe o código
-    do idioma na frente do texto, e o idioma é adivinhado por uma lista mínima de palavras
-    comuns (serve para testar o fluxo, não a qualidade). usage() mostra quantos caracteres
-    esta execução TERIA gasto num serviço real."""
+    """Fake service, for testing the program without spending any service characters.
+    Usage: --provider fake. No key or internet needed. The "translation" only puts the language
+    code in front of the text, and the language is guessed from a minimal list of common words
+    (good for testing the flow, not the quality). usage() shows how many characters this run
+    WOULD have spent on a real service."""
 
-    name, label, key_env = "fake", "Fake (teste, sem custo)", "FAKE_KEY"
+    name, label, key_env = "fake", "Fake (test, no cost)", "FAKE_KEY"
     hidden = True
     STOP = {"IT": {"il", "lo", "la", "gli", "le", "di", "che", "è", "per", "un", "una", "non",
                    "sono", "del", "della", "mi", "ho", "con", "ma", "più", "vado", "poi",
@@ -23,7 +23,7 @@ class FakeProvider(TranslationProvider):
                    "você", "eu", "ele", "ela", "está", "muito", "mais", "isso", "que"}}
 
     def __init__(self):
-        self.chars = 0                                   # caracteres "gastos" nesta execução
+        self.chars = 0                                   # characters "spent" in this run
         super().__init__(key="fake")
 
     def connect(self, key):
@@ -44,7 +44,7 @@ class FakeProvider(TranslationProvider):
         return best if score[best] else "EN"
 
     def usage(self):
-        return f"{self.chars} caracteres simulados"
+        return f"{self.chars} simulated characters"
 
     def detect(self, texts, target_lang):
         self.chars += sum(len(t) for t in texts)

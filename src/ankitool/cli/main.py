@@ -8,32 +8,32 @@ from ankitool.cli.translate import AnkiTranslatorApp
 from ankitool.core.errors import AnkiToolError
 
 
-MENU = {"1": ("translate", "Traduzir um baralho",
-              "Troca o idioma do texto dos cartões (ex.: de italiano para português). Usa o DeepL."),
-        "2": ("reverse", "Inverter os cartões (frente <-> verso)",
-              "O que aparece na frente passa para o verso, e vice-versa. O texto não muda."),
-        "3": ("info", "Ver o que tem dentro de um baralho",
-              "Só mostra informações (tipos de nota, campos, baralhos). Não cria nenhum arquivo."),
-        "0": ("exit", "Sair", None)}
+MENU = {"1": ("translate", "Translate a deck",
+              "Changes the language of the card text (e.g. from Italian to Portuguese). Uses DeepL."),
+        "2": ("reverse", "Swap the cards (front <-> back)",
+              "What shows on the front moves to the back, and vice versa. The text does not change."),
+        "3": ("info", "See what's inside a deck",
+              "Only shows information (note types, fields, decks). Does not create any file."),
+        "0": ("exit", "Quit", None)}
 
-BACK_TO_MENU = "\nQuer fazer mais alguma coisa?\n  (s = voltar ao menu principal, n = fechar o programa)"
+BACK_TO_MENU = "\nDo you want to do anything else?\n  (y = back to the main menu, n = quit the program)"
 
 def _failed(text, from_menu):
-    """Mostra o erro. Devolve True se deve voltar ao menu; fora do menu, encerra com código 1."""
+    """Shows the error. Returns True if it should go back to the menu; outside the menu, exits with code 1."""
     print(f"\n{text}", file=sys.stdout if from_menu else sys.stderr)
     if not from_menu:
         sys.exit(1)
-    return not Ui.auto and Ui.yes(BACK_TO_MENU, "s")
+    return not Ui.auto and Ui.yes(BACK_TO_MENU, "y")
 
 def main(argv=None):
-    from_menu = False                                    # só volta ao menu quem começou por ele
+    from_menu = False                                    # only those who started from the menu go back to it
     while True:
         try:
             opts = parse_args(argv)
             if getattr(opts, "command", None) is None:
                 from_menu = True
                 options = {k: (v[1], v[2]) for k, v in MENU.items()}
-                key = Ui.choose("O que você quer fazer?", options, "1")
+                key = Ui.choose("What do you want to do?", options, "1")
                 if key == "0":
                     break
                 opts = parse_args([MENU[key][0]])
@@ -47,32 +47,32 @@ def main(argv=None):
             elif opts.command == "langs":
                 provider = choose_provider(opts)
                 if opts.source:
-                    Ui.show_langs("Idiomas de origem que o serviço reconhece (código e nome):",
+                    Ui.show_langs("Source languages the service recognizes (code and name):",
                                   provider.source_langs)
                 else:
-                    Ui.show_langs("Idiomas de saída disponíveis (código e nome):",
+                    Ui.show_langs("Available target languages (code and name):",
                                   provider.target_langs)
             elif opts.command != "exit":
                 AnkiTranslatorApp(opts).run()
 
-            if not from_menu or Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
+            if not from_menu or Ui.auto or not Ui.yes(BACK_TO_MENU, "y"):
                 break
-            argv = []  # Reseta os argumentos para forçar o menu interativo na próxima iteração
+            argv = []  # Resets the arguments so the interactive menu shows up next time
 
-        except AnkiToolError as e:                       # erros esperados (nossos)
-            if not _failed(f"[Aviso] {e}", from_menu):
+        except AnkiToolError as e:                       # expected (our) errors
+            if not _failed(f"[Warning] {e}", from_menu):
                 break
             argv = []
-        except SystemExit:                               # só vem do argparse: -h, -V, erro de uso
+        except SystemExit:                               # only from argparse: -h, -V, usage error
             if not from_menu:
                 raise
-            if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
+            if Ui.auto or not Ui.yes(BACK_TO_MENU, "y"):
                 break
             argv = []
         except KeyboardInterrupt:
-            print("\nInterrompido.")
+            print("\nInterrupted.")
             sys.exit(130)
         except Exception as e:
-            if not _failed(f"[Erro Inesperado] {e}", from_menu):
+            if not _failed(f"[Unexpected error] {e}", from_menu):
                 break
             argv = []

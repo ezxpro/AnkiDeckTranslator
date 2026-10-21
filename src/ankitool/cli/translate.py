@@ -11,7 +11,7 @@ from ankitool.ops.translate import TranslateConfig, TranslateOperation
 
 
 class AnkiTranslatorApp:
-    """Orquestra o fluxo: perguntas -> importar -> detectar -> traduzir -> renomear -> exportar."""
+    """Coordinates the flow: questions -> import -> detect -> translate -> rename -> export."""
 
     def __init__(self, opts):
         self.opts = opts
@@ -23,89 +23,89 @@ class AnkiTranslatorApp:
         self.client = choose_provider(opts)
         usage = self.client.usage()
         if usage is not None:
-            self.rep.log(f"uso atual {self.client.label}:", usage)
+            self.rep.log(f"current usage {self.client.label}:", usage)
         self.cache = TranslationCache(self.client.cache_file("cache", self.cache_dir),
                                       self.client.target_codes, self.rep)
         self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache", self.cache_dir), self.rep)
-        self.rep.log(f"cache: {self.cache.count()} traduções e {len(self.cache.lang)} idiomas "
-                     f"de texto guardados em {self.cache.path}")
+        self.rep.log(f"cache: {self.cache.count()} translations and {len(self.cache.lang)} "
+                     f"text languages stored in {self.cache.path}")
         self.target = None
 
-    # ---- perguntas ----
+    # ---- questions ----
     def ask_target(self):
         if self.opts.target:
             target = self.client.resolve_target(self.opts.target)
             if not target:
-                raise ConfigError(f"Idioma de saída inválido: {self.opts.target}. "
-                                  f"Use o comando 'langs' para ver os códigos.")
+                raise ConfigError(f"Invalid target language: {self.opts.target}. "
+                                  f"Use the 'langs' command to see the codes.")
         else:
             if not Ui.auto:
-                Ui.show_langs("Idiomas para os quais dá para traduzir (código e nome):",
+                Ui.show_langs("Languages you can translate into (code and name):",
                               self.client.target_langs)
-                print("Para qual idioma você quer traduzir o baralho?")
-                print("Digite o CÓDIGO da lista acima (ex.: PT-BR, EN-US, ES) e aperte Enter.")
-                print(f"Se você só apertar Enter, uso {self.client.default_target}.")
+                print("Which language do you want to translate the deck into?")
+                print("Type the CODE from the list above (e.g. PT-BR, EN-US, ES) and press Enter.")
+                print(f"If you just press Enter, I'll use {self.client.default_target}.")
             while True:
-                raw = Ui.ask("Idioma de saída", self.client.default_target)
+                raw = Ui.ask("Target language", self.client.default_target)
                 target = self.client.resolve_target(raw)
                 if target:
                     break
-                print(f"  '{raw}' não é um código da lista. Digite um dos códigos que aparecem acima.")
+                print(f"  '{raw}' is not a code in the list. Type one of the codes shown above.")
         self.target = target
 
     def show_detected(self, op, detected):
-        print("\n=== Idioma que encontrei em cada campo ===")
-        print("(Olhei alguns cartões de cada campo e adivinhei o idioma. "
-              "A % diz o quanto tenho certeza.)")
+        print("\n=== Language I found in each field ===")
+        print("(I looked at some cards of each field and guessed the language. "
+              "The % shows how sure I am.)")
         cur = None
         for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0][0]):
             if mid != cur:
                 print(f"\n{op.anki.model_names[mid]}")
                 cur = mid
-            label = lang if ratio >= op.cfg.min_ratio else f"{lang}? (incerto)"
-            print(f" {f}: {label} ({ratio:.0%}) ex.: {ex}")
+            label = lang if ratio >= op.cfg.min_ratio else f"{lang}? (uncertain)"
+            print(f" {f}: {label} ({ratio:.0%}) e.g.: {ex}")
 
     def ask_languages(self, op, detected):
         options, already = op.language_options(detected)
         if not options:
-            raise AnkiToolError("\nNenhum campo em outro idioma para traduzir.")
+            raise AnkiToolError("\nNo field in another language to translate.")
 
-        labels = [f"{code} - {self.client.source_names.get(code, code)} ({c} campos)"
+        labels = [f"{code} - {self.client.source_names.get(code, code)} ({c} fields)"
                   for code, c in options]
-        note = (f"({already} campo(s) já estão em {op.tbase} e serão mantidos do jeito que estão; "
-                f"campos 'incertos' também.)") if already else None
+        note = (f"({already} field(s) are already in {op.tbase} and will be kept as they are; "
+                f"'uncertain' fields too.)") if already else None
 
-        if self.opts.lang or Ui.auto:                    # sem pergunta: --lang, ou todos com --yes
-            print(f"\n=== Idiomas que podem ser traduzidos para {self.target} ===")
+        if self.opts.lang or Ui.auto:                    # no question: --lang, or all with --yes
+            print(f"\n=== Languages that can be translated into {self.target} ===")
             for i, lab in enumerate(labels, 1):
                 print(f" {i}) {lab}")
             if note:
                 print(f" {note}")
             return TranslateOperation.validate_languages(self.opts.lang, dict(options))
 
-        intro = ("Estes são os idiomas que encontrei no baralho. Escolha quais você quer traduzir."
+        intro = ("These are the languages I found in the deck. Choose which ones you want to translate."
                  + (f"\n{note}" if note else ""))
-        idx = Ui.select(f"Quais idiomas você quer traduzir para {self.target}?", labels,
+        idx = Ui.select(f"Which languages do you want to translate into {self.target}?", labels,
                         multi=True, default="all" if len(options) == 1 else None,
                         intro=intro,
-                        hint="Também vale digitar o código do idioma (ex.: IT, ou IT,EN).",
+                        hint="You can also type the language code (e.g. IT, or IT,EN).",
                         aliases={code.upper(): i for i, (code, _) in enumerate(options)})
         if idx is None:
-            raise Cancelled("Cancelado.")
+            raise Cancelled("Cancelled.")
         return {options[i][0] for i in idx}
 
     def print_estimate(self, est):
-        print("\n=== Simulação (--dry-run) ===")
-        print(f"Textos que seriam enviados: {est.texts}")
-        print(f"Caracteres estimados: ~{est.chars}")
-        print(f"Já no cache (sem custo): {est.cached}")
+        print("\n=== Simulation (--dry-run) ===")
+        print(f"Texts that would be sent: {est.texts}")
+        print(f"Estimated characters: ~{est.chars}")
+        print(f"Already in cache (no cost): {est.cached}")
         for (L, T), n in est.by_pair.items():
-            print(f"  {L} -> {T}: {n} textos")
+            print(f"  {L} -> {T}: {n} texts")
 
-    # ---- fluxo ----
+    # ---- flow ----
     def run(self):
         opts, dry = self.opts, self.opts.dry_run
-        src, out = (ask_input(opts), None) if dry else ask_paths(opts)   # dry: não gera arquivo
+        src, out = (ask_input(opts), None) if dry else ask_paths(opts)   # dry: no file is created
         self.ask_target()
 
         cfg = TranslateConfig(
@@ -120,16 +120,16 @@ class AnkiTranslatorApp:
 
             picked = self.ask_languages(op, detected)
             chosen = op.plan(detected, picked)
-            self.rep.log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
+            self.rep.log("chosen languages:", ", ".join(sorted(picked)), f"-> {len(chosen)} fields")
 
             est = op.translate(chosen, dry_run=dry)
             if dry:
                 self.print_estimate(est)
                 usage = self.client.usage()
                 if usage is not None:
-                    print(f"Uso atual do {self.client.label}: {usage}")
-                print("(A detecção de idioma já gastou alguns caracteres.)")
-                print("Nada foi traduzido nem exportado (--dry-run).")
+                    print(f"Current usage of {self.client.label}: {usage}")
+                print("(Language detection has already spent some characters.)")
+                print("Nothing was translated or exported (--dry-run).")
                 return
             op.apply(chosen)
 
@@ -139,9 +139,9 @@ class AnkiTranslatorApp:
                                                 opts.deck_names)).run(src_lang)
 
             op.export(out)
-            print("pronto ->", out)
+            print("done ->", out)
             usage = self.client.usage()
             if usage is not None:
-                self.rep.log(f"uso {self.client.label} ao final:", usage)
+                self.rep.log(f"{self.client.label} usage at the end:", usage)
         finally:
             op.close()

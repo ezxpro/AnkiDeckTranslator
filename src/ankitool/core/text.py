@@ -8,7 +8,7 @@ class TextTools:
 
     @staticmethod
     def h(s):
-        """Hash curto e estável de um texto: o cache guarda isso no lugar do texto original."""
+        """Short, stable hash of a text: the cache stores this instead of the original text."""
         return hashlib.blake2b(s.encode("utf-8"), digest_size=12).hexdigest()
 
     @classmethod
@@ -26,5 +26,5 @@ class TextTools:
 h = TextTools.h
 
 def lang_base(code):
-    """'pt-BR' / 'PT_br' / 'PT' -> 'PT': compara idiomas ignorando região e maiúsculas."""
+    """'pt-BR' / 'PT_br' / 'PT' -> 'PT': compares languages ignoring region and case."""
     return re.split(r"[-_]", (code or "").upper())[0]

@@ -11,17 +11,17 @@ from ankitool.core.text import TextTools
 
 @dataclass(frozen=True)
 class Language:
-    code: str                                  # código na grafia do próprio provedor
+    code: str                                  # code in the provider's own spelling
     name: str
 
 @dataclass(frozen=True)
 class TranslationResult:
     text: str
-    detected_source_lang: str = None           # idioma detectado (grafia do provedor)
+    detected_source_lang: str = None           # detected source language (provider's spelling)
 
 def load_secret(env_name, label):
-    """Procura a chave na variável de ambiente <env_name>; se não achar, lê o arquivo .env
-    que fica na mesma pasta do script (linha no formato NOME=valor)."""
+    """Looks for the key in the environment variable <env_name>; if not found, reads the .env
+    file next to the script (line in NAME=value format)."""
     key = os.environ.get(env_name, "").strip()
     if not key:
         env_file = SCRIPT_DIR / ".env"
@@ -35,12 +35,12 @@ def load_secret(env_name, label):
                     key = value.strip().strip('"').strip("'")
                     break
     if not key:
-        raise ConfigError(f"Chave do {label} não encontrada. Defina a variável de ambiente "
-                          f"{env_name} ou crie um arquivo .env ao lado do script com:\n"
-                          f"{env_name}=sua-chave-aqui")
+        raise ConfigError(f"API key for {label} not found. Set the environment variable "
+                          f"{env_name} or create a .env file next to the script with:\n"
+                          f"{env_name}=your-key-here")
     return key
 
-PROVIDERS = {}                                 # nome -> classe; preenchido por @register_provider
+PROVIDERS = {}                                 # name -> class; filled by @register_provider
 
 def register_provider(cls):
     PROVIDERS[cls.name] = cls
@@ -48,31 +48,31 @@ def register_provider(cls):
 
 def make_provider(name):
     if name not in PROVIDERS:
-        raise ConfigError(f"Serviço de tradução desconhecido: {name}. "
-                          f"Disponíveis: {', '.join(sorted(PROVIDERS))}")
+        raise ConfigError(f"Unknown translation service: {name}. "
+                          f"Available: {', '.join(sorted(PROVIDERS))}")
     return PROVIDERS[name]()
 
 class TranslationProvider(ABC):
-    """Contrato de um serviço de tradução. O restante do programa só conhece esta interface.
+    """The contract of a translation service. The rest of the program only knows this interface.
 
-    Para adicionar outro serviço (Google, Azure, LibreTranslate, ...):
-      1. crie uma subclasse com name, label e key_env;
-      2. implemente connect, fetch_target_languages, fetch_source_languages e _translate
-         (e, se houver, usage e detect);
-      3. decore a classe com @register_provider.
-    Ele passa a valer em --provider e no menu interativo, com cache próprio
-    (cache_<name>.json). Se o serviço não entende HTML com translate="no", sobrescreva
-    mask/unmask para proteger [sound:...] e {{c1::...}} de outra forma."""
+    To add another service (Google, Azure, LibreTranslate, ...):
+      1. create a subclass with name, label and key_env;
+      2. implement connect, fetch_target_languages, fetch_source_languages and _translate
+         (and, if available, usage and detect);
+      3. decorate the class with @register_provider.
+    It then works with --provider and in the interactive menu, with its own cache
+    (cache_<name>.json). If the service does not understand HTML with translate="no",
+    override mask/unmask to protect [sound:...] and {{c1::...}} in another way."""
 
-    name = ""                                  # identificador usado em --provider
-    label = ""                                 # nome para exibição
-    key_env = ""                               # variável de ambiente / .env com a chave
-    default_target = "PT-BR"                   # código sugerido como idioma de saída
-    batch_size = 40                            # textos por chamada
+    name = ""                                  # identifier used in --provider
+    label = ""                                 # display name
+    key_env = ""                               # environment variable / .env key name
+    default_target = "PT-BR"                   # suggested output language code
+    batch_size = 40                            # texts per call
     retries = 3
-    transient_errors = (ConnectionError, TimeoutError)   # erros que valem nova tentativa
-    cache_tag = None                           # None -> "_<name>" nos nomes dos arquivos de cache
-    hidden = False                             # True: só vale com --provider, fora do menu
+    transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
+    cache_tag = None                           # None -> "_<name>" in cache file names
+    hidden = False                             # True: only available with --provider, not in the menu
 
     def __init__(self, key=None):
         self.key = key or load_secret(self.key_env, self.label)
@@ -83,35 +83,35 @@ class TranslationProvider(ABC):
         self.source_names = {l.code: l.name for l in self.source_langs}
         self._target_by_norm = {l.code.upper(): l.code for l in self.target_langs}
 
-    # ---- a implementar em cada serviço ----
+    # ---- to implement in each service ----
     @abstractmethod
     def connect(self, key):
-        """Cria o cliente do serviço (e ajusta transient_errors, se preciso)."""
+        """Creates the service client (and sets transient_errors, if needed)."""
 
     @abstractmethod
     def fetch_target_languages(self):
-        """-> lista de Language disponíveis como saída."""
+        """-> list of Language available as output."""
 
     @abstractmethod
     def fetch_source_languages(self):
-        """-> lista de Language reconhecidos como origem."""
+        """-> list of Language recognized as source."""
 
     @abstractmethod
     def _translate(self, texts, target_lang, source_lang, html):
-        """Uma chamada ao serviço. Devolve uma TranslationResult por texto, na mesma ordem.
-        html=True: os textos contêm tags <span translate="no"> que não podem ser traduzidas."""
+        """One call to the service. Returns one TranslationResult per text, in the same order.
+        html=True: the texts contain <span translate="no"> tags that must not be translated."""
 
     def usage(self):
-        """Consumo atual (para exibir), ou None se o serviço não informa."""
+        """Current usage (for display), or None if the service does not report it."""
         return None
 
     def detect(self, texts, target_lang):
-        """Idioma de cada texto (None se o serviço estiver fora do ar). Por padrão traduz e
-        lê o idioma detectado; sobrescreva se o serviço tiver um endpoint de detecção."""
+        """Language of each text (None if the service is unavailable). By default this translates
+        and reads the detected language; override it if the service has a detection endpoint."""
         res = self.translate(texts, target_lang)
         return None if res is None else [r.detected_source_lang for r in res]
 
-    # ---- comum a todos ----
+    # ---- common to all ----
     def mask(self, t):
         return TextTools.mask(t)
 
@@ -119,8 +119,8 @@ class TranslationProvider(ABC):
         return TextTools.unmask(t)
 
     def translate(self, texts, target_lang, source_lang=None, protect_tags=False):
-        """Traduz com retentativa; devolve None se o serviço não responder.
-        protect_tags=True protege [sound:...] e {{c1::...}} (restaurados no resultado)."""
+        """Translates with retries; returns None if the service does not respond.
+        protect_tags=True protects [sound:...] and {{c1::...}} (restored in the result)."""
         payload = [self.mask(t) for t in texts] if protect_tags else list(texts)
         for _ in range(self.retries):
             try:
@@ -135,7 +135,7 @@ class TranslationProvider(ABC):
         return res
 
     def resolve_target(self, raw):
-        """Texto digitado -> código de saída válido (grafia do serviço), ou None."""
+        """Typed text -> valid output code (in the service's spelling), or None."""
         return self._target_by_norm.get((raw or "").strip().upper())
 
     def cache_file(self, stem, cache_dir):

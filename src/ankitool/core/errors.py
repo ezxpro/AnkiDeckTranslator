@@ -1,11 +1,11 @@
 class AnkiToolError(Exception):
-    """Erro esperado (mensagem para a pessoa). O front-end decide como mostrar/sair."""
+    """Expected error (message shown to the user). The front end decides how to show it and whether to exit."""
 
 class ConfigError(AnkiToolError):
-    """Opção/entrada inválida."""
+    """Invalid option or input."""
 
 class ProviderUnavailable(AnkiToolError):
-    """O serviço de tradução não respondeu."""
+    """The translation service did not respond."""
 
 class Cancelled(AnkiToolError):
-    """A operação foi cancelada."""
+    """The operation was cancelled."""

@@ -16,8 +16,8 @@ class CancelToken:
         return self._ev.is_set()
 
 class Reporter:
-    """Canal de feedback do núcleo. Esta base é silenciosa (ideal para uso como biblioteca);
-    a CLI usa ConsoleReporter e a GUI terá o seu."""
+    """Feedback channel for the core. This base is silent (suitable for use as a library);
+    the CLI uses ConsoleReporter and the GUI will have its own."""
 
     def __init__(self, cancel=None):
         self.cancel = cancel or CancelToken()
@@ -28,10 +28,10 @@ class Reporter:
 
     def check_cancelled(self):
         if self.cancel.cancelled:
-            raise Cancelled("Cancelado.")
+            raise Cancelled("Cancelled.")
 
 def track(rep, items, label):
-    """Percorre 'items' avisando o Reporter do andamento (e respeitando o cancelamento)."""
+    """Iterates over 'items', reporting progress to the Reporter (and honoring cancellation)."""
     total = len(items)
     for i, x in enumerate(items, 1):
         rep.check_cancelled()
@@ -39,8 +39,8 @@ def track(rep, items, label):
         rep.advance(label, i, total)
 
 class Heartbeat:
-    """Para chamadas longas sem progresso interno (importar/exportar):
-    mostra 'ainda trabalhando... Ns' a cada poucos segundos."""
+    """For long calls with no internal progress (import/export):
+    shows 'still working... Ns' every few seconds."""
     def __init__(self, rep, msg, every=5):
         self.rep, self.msg, self.every = rep, msg, every
 
@@ -57,5 +57,5 @@ class Heartbeat:
     def __exit__(self, exc_type, *rest):
         self.stop.set()
         if exc_type is None:
-            self.rep.log(f"{self.msg}: concluído em {time.time() - self.t0:.1f}s")
+            self.rep.log(f"{self.msg}: finished in {time.time() - self.t0:.1f}s")
         return False

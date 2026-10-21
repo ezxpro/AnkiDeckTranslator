@@ -4,8 +4,8 @@ from ankitool.core.progress import Reporter
 
 
 class DeckNameCache:
-    """deck_cache.json, separado do cache.json. Só a saída bruta do serviço é gravada;
-    nomes digitados à mão nunca vão para o cache."""
+    """deck_cache.json, separate from cache.json. Only the raw service output is stored;
+    names typed by hand are never written to the cache."""
 
     def __init__(self, path, rep=None):
         self.path = path
@@ -22,7 +22,7 @@ class DeckNameCache:
         except (OSError, ValueError, AttributeError):
             bak = self.path.with_name(self.path.name + ".bak")
             self.path.replace(bak)
-            self.rep.log(f"deck_cache.json estava ilegível; guardei uma cópia em {bak.name}")
+            self.rep.log(f"deck_cache.json was unreadable; saved a copy as {bak.name}")
         return {"version": 1, "names": {}}
 
     def bucket(self, target, src_lang):

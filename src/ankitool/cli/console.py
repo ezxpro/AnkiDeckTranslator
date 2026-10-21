@@ -20,7 +20,7 @@ class ConsoleReporter(Reporter):
         if not self.quiet:
             print(time.strftime("%H:%M:%S"), *a, flush=True)
 
-    def warn(self, *a):                                   # aparece mesmo com --quiet
+    def warn(self, *a):                                   # shown even with --quiet
         print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
 
     def advance(self, label, done, total):
@@ -45,9 +45,12 @@ class ConsoleReporter(Reporter):
             self._last.pop(label, None)
             self._next.pop(label, None)
 
+YES_WORDS = ("s", "sim", "y", "yes")
+NO_WORDS = ("n", "nao", "não", "no")
+
 class Ui:
-    """Entrada/saída de console: log, perguntas, menus e barra de progresso.
-    Com Ui.auto = True (opção --yes), nenhuma pergunta é feita: vale o valor padrão."""
+    """Console input/output: log, questions, menus and progress bar.
+    With Ui.auto = True (the --yes option), no questions are asked: the default value is used."""
 
     auto = False
 
@@ -59,40 +62,40 @@ class Ui:
 
     @staticmethod
     def yes(msg, default="n"):
-        """Pergunta de sim/não. Só aceita s/n (ou variações); Enter usa o padrão."""
+        """Yes/no question. Only accepts y/n (or variations); Enter uses the default."""
         if Ui.auto:
-            return default.lower() in ("s", "sim", "y", "yes")
-        padrao = "sim" if default.lower() in ("s", "sim", "y", "yes") else "não"
+            return default.lower() in YES_WORDS
+        label = "yes" if default.lower() in YES_WORDS else "no"
         while True:
-            r = input(f"{msg}\n  Digite s (sim) ou n (não). Só Enter = {padrao}: ").strip().lower()
+            r = input(f"{msg}\n  Type y (yes) or n (no). Just Enter = {label}: ").strip().lower()
             if r == "":
                 r = default.lower()
-            if r in ("s", "sim", "y", "yes"):
+            if r in YES_WORDS:
                 return True
-            if r in ("n", "nao", "não", "no"):
+            if r in NO_WORDS:
                 return False
-            print("  Não entendi. Digite s para sim ou n para não.")
+            print("  Not understood. Type y for yes or n for no.")
 
     @staticmethod
     def choose(title, opts, default):
-        """Menu de UMA escolha. opts: {"1": "Texto"} ou {"1": ("Texto", "explicação curta")}."""
+        """Single-choice menu. opts: {"1": "Text"} or {"1": ("Text", "short explanation")}."""
         print(f"\n{title}")
         for k, v in opts.items():
             label, desc = v if isinstance(v, tuple) else (v, None)
-            mark = "   <- padrão (só apertar Enter)" if k == default else ""
+            mark = "   <- default (just press Enter)" if k == default else ""
             print(f"  {k}) {label}{mark}")
             if desc:
                 print(f"       {desc}")
-        print("\nDigite o número da opção e aperte Enter.")
+        print("\nType the option number and press Enter.")
         while True:
-            r = Ui.ask("Escolha", default)
+            r = Ui.ask("Choice", default)
             if r in opts:
                 return r
-            print(f"  Opção inválida. Digite um destes números: {', '.join(opts)}.")
+            print(f"  Invalid option. Type one of these numbers: {', '.join(opts)}.")
 
     @staticmethod
     def parse_numbers(raw, n):
-        """'1,3,5-8' -> {1,3,5,6,7,8}; None se algo estiver fora de 1..n."""
+        """'1,3,5-8' -> {1,3,5,6,7,8}; None if anything is outside 1..n."""
         out = set()
         for tok in re.split(r"[,\s;]+", raw):
             if not tok:
@@ -107,10 +110,10 @@ class Ui:
     @staticmethod
     def select(title, labels, multi=True, default="all", intro=None, hint=None,
                aliases=None, cancel=True):
-        """Lista numerada para escolher itens. Devolve lista de índices (a partir de 0),
-        ou None se a pessoa cancelou (0).
-        default: 'all' (Enter = todos), 'first' (Enter = o 1) ou None (Enter não vale).
-        aliases: {TEXTO_EM_MAIUSCULAS: índice}, para aceitar também códigos digitados."""
+        """Numbered list to choose items. Returns a list of indices (starting at 0),
+        or None if the person cancelled (0).
+        default: 'all' (Enter = all), 'first' (Enter = item 1) or None (Enter is not allowed).
+        aliases: {UPPERCASE_TEXT: index}, to also accept typed codes."""
         n = len(labels)
         if Ui.auto:
             return list(range(n)) if default == "all" else [0] if default == "first" else None
@@ -121,27 +124,27 @@ class Ui:
         for i, lab in enumerate(labels, 1):
             print(f"  {i:>3}) {lab}")
         if cancel:
-            print("    0) Cancelar (não fazer nada)")
+            print("    0) Cancel (do nothing)")
         print()
         if multi:
-            print("Como escolher: digite o número do item e aperte Enter.")
-            print("Para escolher vários, separe por vírgula (ex.: 1,3) ou use intervalo (ex.: 2-5).")
+            print("How to choose: type the item number and press Enter.")
+            print("To choose several, separate them with commas (e.g. 1,3) or use a range (e.g. 2-5).")
         else:
-            print("Como escolher: digite o número do item e aperte Enter.")
+            print("How to choose: type the item number and press Enter.")
         if hint:
             print(hint)
         if default == "all":
-            print("Se você só apertar Enter, eu escolho TODOS os itens.")
+            print("If you just press Enter, I'll choose ALL items.")
         elif default == "first":
-            print("Se você só apertar Enter, eu escolho o item 1.")
+            print("If you just press Enter, I'll choose item 1.")
         while True:
-            raw = input("Sua escolha: ").strip().strip('"')
+            raw = input("Your choice: ").strip().strip('"')
             if raw == "":
                 if default == "all":
                     return list(range(n))
                 if default == "first":
                     return [0]
-                print("  Preciso de uma resposta. Digite um número da lista.")
+                print("  I need an answer. Type a number from the list.")
                 continue
             if cancel and raw == "0":
                 return None
@@ -160,10 +163,10 @@ class Ui:
             if picked and not bad and (multi or len(picked) == 1):
                 return sorted(picked)
             if picked and not bad:
-                print("  Aqui dá para escolher só um item. Digite um único número.")
+                print("  Only one item can be chosen here. Type a single number.")
             else:
-                print(f"  Não entendi '{', '.join(bad) or raw}'. Digite números de 1 a {n}"
-                      f"{', ou 0 para cancelar' if cancel else ''}.")
+                print(f"  I didn't understand '{', '.join(bad) or raw}'. Type numbers from 1 to {n}"
+                      f"{', or 0 to cancel' if cancel else ''}.")
 
     @staticmethod
     def show_langs(title, langs):
@@ -180,7 +183,7 @@ class Ui:
         print()
 
 def default_start():
-    """Pasta inicial do seletor: a pasta atual, ou a do script, se só ali houver .apkg."""
+    """Starting folder for the picker: the current folder, or the script's folder if only .apkg files are there."""
     def has_apkg(d):
         try:
             return any(p.suffix.lower() == ".apkg" for p in d.iterdir() if p.is_file())
@@ -192,14 +195,14 @@ def default_start():
     return SCRIPT_DIR
 
 def pick_file(start=None, suffix=".apkg"):
-    """Navegador de arquivos no terminal. Mostra as pastas e os arquivos .apkg da pasta atual.
-    Devolve o Path do arquivo escolhido, ou None se a pessoa cancelou."""
+    """Terminal file browser. Shows the folders and .apkg files of the current folder.
+    Returns the Path of the chosen file, or None if the person cancelled."""
     cur = Path(start or Path.cwd()).resolve()
     while True:
         try:
             entries = sorted(cur.iterdir(), key=lambda p: p.name.lower())
         except OSError:
-            print(f"\n  Não consegui abrir a pasta {cur}. Voltando uma pasta.")
+            print(f"\n  Could not open the folder {cur}. Going up one folder.")
             if cur.parent == cur:
                 return None
             cur = cur.parent
@@ -215,14 +218,14 @@ def pick_file(start=None, suffix=".apkg"):
             except OSError:
                 continue
 
-        print(f"\n=== Escolher arquivo {suffix} ===")
-        print(f"Você está na pasta: {cur}\n")
+        print(f"\n=== Choose a {suffix} file ===")
+        print(f"You are in the folder: {cur}\n")
         items = []
         if cur.parent != cur:
-            print("   ..) Subir uma pasta (voltar)")
+            print("   ..) Go up one folder (back)")
         for p in dirs:
             items.append(p)
-            print(f"  {len(items):>3}) [pasta]  {p.name}")
+            print(f"  {len(items):>3}) [folder]  {p.name}")
         for p in files:
             items.append(p)
             try:
@@ -231,15 +234,15 @@ def pick_file(start=None, suffix=".apkg"):
                 size = ""
             print(f"  {len(items):>3}) {p.name}{size}")
         if not items:
-            print(f"      (aqui não há pastas nem arquivos {suffix})")
-        print("    0) Cancelar (não escolher nenhum arquivo)")
+            print(f"      (there are no folders or {suffix} files here)")
+        print("    0) Cancel (don't choose any file)")
 
-        print("\nComo usar:")
-        print("  - Número de uma [pasta]: entra nessa pasta.")
-        print(f"  - Número de um arquivo {suffix}: escolhe esse arquivo.")
-        print("  - Dois pontos (..): sobe uma pasta.")
-        print(f"  - Ou cole o caminho completo de um arquivo {suffix} (ou de uma pasta).")
-        raw = input("Sua escolha: ").strip().strip('"').strip("'")
+        print("\nHow to use it:")
+        print("  - Number of a [folder]: go into that folder.")
+        print(f"  - Number of a {suffix} file: choose that file.")
+        print("  - Two dots (..): go up one folder.")
+        print(f"  - Or paste the full path of a {suffix} file (or of a folder).")
+        raw = input("Your choice: ").strip().strip('"').strip("'")
 
         if raw == "0":
             return None
@@ -254,8 +257,8 @@ def pick_file(start=None, suffix=".apkg"):
                     cur = choice
                     continue
                 return choice
-            faixa = f"de 1 a {len(items)}, " if items else ""
-            print(f"\n  Número fora da lista. Digite um número {faixa}'..' ou 0.".replace("um número de", "um número de"))
+            faixa = f"from 1 to {len(items)}, " if items else ""
+            print(f"\n  Number out of the list. Type a number {faixa}'..' or 0.")
             continue
         if raw:
             p = Path(raw).expanduser()
@@ -270,39 +273,39 @@ def pick_file(start=None, suffix=".apkg"):
                     return p
             except OSError:
                 pass
-            print(f"\n  Não achei '{raw}' como pasta nem como arquivo {suffix}.")
+            print(f"\n  Could not find '{raw}' as a folder or as a {suffix} file.")
             continue
-        print("\n  Preciso de uma resposta. Digite um número, '..' ou 0.")
+        print("\n  I need an answer. Type a number, '..' or 0.")
 
 def choose_provider(opts):
-    """Serviço de tradução: --provider, ou pergunta (se houver mais de um), ou o padrão."""
+    """Translation service: --provider, or a question (if there is more than one), or the default."""
     name = getattr(opts, "provider", None)
     visible = sorted(n for n, c in PROVIDERS.items() if not c.hidden)
     if not name and len(visible) > 1 and not Ui.auto:
         keys = {str(i): n for i, n in enumerate(visible, 1)}
         default = next(k for k, n in keys.items() if n == DEFAULT_PROVIDER)
-        key = Ui.choose("Qual serviço de tradução você quer usar?",
+        key = Ui.choose("Which translation service do you want to use?",
                         {k: PROVIDERS[n].label for k, n in keys.items()}, default)
         name = keys[key]
     return make_provider(name or DEFAULT_PROVIDER)
 
 def ask_input(opts):
-    """Lê o .apkg de entrada das opções ou abre o seletor de arquivos."""
+    """Reads the input .apkg from the options or opens the file picker."""
     if opts.input:
         src = Path(opts.input).expanduser().resolve()
     elif Ui.auto:
-        raise ConfigError("Com -y/--yes é preciso informar o arquivo .apkg de entrada.")
+        raise ConfigError("With -y/--yes you must give the input .apkg file.")
     else:
-        print("\nPrimeiro, escolha o baralho (arquivo .apkg) que você quer usar.")
+        print("\nFirst, choose the deck (.apkg file) you want to use.")
         src = pick_file(default_start())
         if src is None:
-            raise Cancelled("Cancelado.")
+            raise Cancelled("Cancelled.")
     if not src.exists():
-        raise ConfigError(f"Arquivo não encontrado: {src}")
+        raise ConfigError(f"File not found: {src}")
     return src
 
 def ask_paths(opts, suffix="_out"):
-    """Escolhe o .apkg de entrada (seletor) e o nome do .apkg de saída."""
+    """Chooses the input .apkg (picker) and the name of the output .apkg."""
     src = ask_input(opts)
     if opts.output:
         out = Path(opts.output).expanduser()
@@ -311,21 +314,21 @@ def ask_paths(opts, suffix="_out"):
         if Ui.auto:
             name = default
         else:
-            print("\nAgora escolha o nome do arquivo NOVO que vou criar. O arquivo original não é alterado.")
-            print(f"Ele será salvo na mesma pasta do original: {src.parent}")
-            name = Ui.ask("Nome do arquivo novo (só Enter = usar o nome sugerido)", default)
+            print("\nNow choose the name of the NEW file I'll create. The original file is not changed.")
+            print(f"It will be saved in the same folder as the original: {src.parent}")
+            name = Ui.ask("Name of the new file (just Enter = use the suggested name)", default)
         out = Path(name).expanduser()
     if not out.is_absolute() and out.parent == Path("."):
-        out = src.parent / out                            # nome simples: fica ao lado do original
+        out = src.parent / out                            # simple name: saved next to the original
     out = out.resolve()
     if out.suffix.lower() != ".apkg":
         out = out.with_name(out.name + ".apkg")
     if out == src:
-        raise ConfigError("O arquivo novo não pode ter o mesmo nome do original.")
+        raise ConfigError("The new file cannot have the same name as the original.")
     if out.exists() and not opts.force:
         if Ui.auto:
-            raise ConfigError(f"O arquivo '{out}' já existe. Use --force para substituí-lo "
-                              f"ou escolha outro nome com -o.")
-        if not Ui.yes(f"\nJá existe um arquivo chamado '{out.name}'. Quer substituí-lo?", "n"):
-            raise Cancelled("Cancelado: rode de novo e escolha outro nome.")
+            raise ConfigError(f"The file '{out}' already exists. Use --force to overwrite it "
+                              f"or choose another name with -o.")
+        if not Ui.yes(f"\nA file named '{out.name}' already exists. Do you want to overwrite it?", "n"):
+            raise Cancelled("Cancelled: run again and choose another name.")
     return src, out

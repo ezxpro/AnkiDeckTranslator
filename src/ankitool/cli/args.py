@@ -14,7 +14,7 @@ def positive_int(s):
     except ValueError:
         v = 0
     if v < 1:
-        raise argparse.ArgumentTypeError(f"'{s}' não é um número inteiro maior que zero")
+        raise argparse.ArgumentTypeError(f"'{s}' is not an integer greater than zero")
     return v
 
 def ratio_type(s):
@@ -23,103 +23,103 @@ def ratio_type(s):
     except ValueError:
         v = 0.0
     if not 0 < v <= 1:
-        raise argparse.ArgumentTypeError(f"'{s}' não está entre 0 e 1 (ex.: 0.6)")
+        raise argparse.ArgumentTypeError(f"'{s}' is not between 0 and 1 (e.g. 0.6)")
     return v
 
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "-V", "--version"):
-        argv.insert(0, "translate")                      # atalho: script deck.apkg -t PT-BR
+        argv.insert(0, "translate")                      # shortcut: script deck.apkg -t PT-BR
 
     p = argparse.ArgumentParser(
         prog=Path(sys.argv[0]).name,
-        description="Ferramentas para baralhos .apkg do Anki. Sem nenhum argumento, abre o "
-                    "modo interativo (menu). Use 'COMANDO -h' para ver as opções de cada comando.",
-        epilog="Em qualquer comando, o que não for informado por opção é perguntado, "
-               "a menos que -y/--yes seja usado.")
+        description="Tools for Anki .apkg decks. With no arguments, opens the "
+                    "interactive mode (menu). Use 'COMMAND -h' to see each command's options.",
+        epilog="For any command, whatever is not given as an option is asked for, "
+               "unless -y/--yes is used.")
     p.add_argument("-V", "--version", action="version", version=f"%(prog)s {VERSION}")
-    sub = p.add_subparsers(dest="command", metavar="COMANDO")
+    sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
     io = argparse.ArgumentParser(add_help=False)
-    io.add_argument("input", nargs="?", metavar="ENTRADA", help="arquivo .apkg de entrada")
+    io.add_argument("input", nargs="?", metavar="INPUT", help="input .apkg file")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-y", "--yes", action="store_true",
-                        help="não perguntar nada: usa os padrões de cada comando")
+                        help="don't ask anything: use each command's defaults")
     common.add_argument("-q", "--quiet", action="store_true",
-                        help="só mostra avisos e o resultado final (sem mensagens de andamento)")
+                        help="only show warnings and the final result (no progress messages)")
     run_opts = argparse.ArgumentParser(add_help=False, parents=[common])
-    run_opts.add_argument("-o", "--output", metavar="SAIDA", help="arquivo .apkg de saída")
+    run_opts.add_argument("-o", "--output", metavar="OUTPUT", help="output .apkg file")
     run_opts.add_argument("-f", "--force", action="store_true",
-                          help="substitui o arquivo de saída se ele já existir "
-                               "(sem isto, com -y o programa para com erro)")
+                          help="overwrite the output file if it already exists "
+                               "(otherwise, with -y, the program stops with an error)")
     run_opts.add_argument("--keep-scheduling", action="store_true",
-                          help="mantém o histórico de estudo (datas, intervalos) e as opções "
-                               "dos baralhos no arquivo gerado (padrão: removidos)")
+                          help="keep study history (dates, intervals) and deck options "
+                               "in the generated file (default: removed)")
     run_opts.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=True,
-                          help="formato antigo do .apkg, aceito por qualquer versão do Anki/"
-                               "AnkiDroid (padrão); --no-legacy gera o formato novo, menor")
+                          help="legacy .apkg format, accepted by any Anki/"
+                               "AnkiDroid version (default); --no-legacy writes the newer, smaller format")
 
     t = sub.add_parser(
         "translate", parents=[io, run_opts],
-        help="traduz os campos (e, opcionalmente, os nomes dos baralhos)",
-        description="Traduz os campos de um baralho com um serviço de tradução (--provider). "
-                    "Saída padrão: <entrada>_out.apkg. "
-                    "Com -y: PT-BR, todos os idiomas detectados, nomes de baralhos intactos.")
-    t.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICO",
-                   help=f"serviço de tradução: {', '.join(sorted(PROVIDERS))} "
-                        f"(padrão: {DEFAULT_PROVIDER})")
-    t.add_argument("-t", "--target", metavar="CODIGO",
-                   help="idioma de saída, ex.: PT-BR, EN-US (veja o comando 'langs')")
-    t.add_argument("-l", "--lang", metavar="CODIGOS",
-                   help="idioma(s) de origem a traduzir, separados por vírgula "
-                        "(ex.: IT,EN) ou 'all' para todos os detectados")
+        help="translate fields (and optionally deck names)",
+        description="Translates the fields of a deck with a translation service (--provider). "
+                    "Default output: <input>_out.apkg. "
+                    "With -y: PT-BR, all detected languages, deck names unchanged.")
+    t.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
+                   help=f"translation service: {', '.join(sorted(PROVIDERS))} "
+                        f"(default: {DEFAULT_PROVIDER})")
+    t.add_argument("-t", "--target", metavar="CODE",
+                   help="target language, e.g. PT-BR, EN-US (see the 'langs' command)")
+    t.add_argument("-l", "--lang", metavar="CODES",
+                   help="source language(s) to translate, comma-separated "
+                        "(e.g. IT,EN) or 'all' for all detected ones")
     t.add_argument("-d", "--rename-decks", choices=["none", "main", "all"],
-                   help="nomes de baralhos: none = não alterar, main = só os baralhos "
-                        "principais, all = principais e secundários")
+                   help="deck names: none = leave unchanged, main = top-level decks only, "
+                        "all = top-level and sub-decks")
     t.add_argument("-m", "--deck-method", choices=["auto", "manual", "review", "keep"],
-                   help="como renomear baralhos: auto (pelo serviço), manual (você digita), "
-                        "review (sugestão do serviço, um a um) ou keep (só os de --deck-name)")
-    t.add_argument("--deck-name", action="append", metavar="ATUAL=NOVO",
-                   help="renomeia o baralho de nome ATUAL (um nível, sem '::') para NOVO; "
-                        "pode repetir. Sem -d/-m, só estes são renomeados")
+                   help="how to rename decks: auto (by the service), manual (you type), "
+                        "review (service suggestion, one by one) or keep (only --deck-name ones)")
+    t.add_argument("--deck-name", action="append", metavar="CURRENT=NEW",
+                   help="renames the deck named CURRENT (one level, no '::') to NEW; "
+                        "can be repeated. Without -d/-m, only these are renamed")
     t.add_argument("--dry-run", action="store_true",
-                   help="só calcula quantos textos e caracteres seriam traduzidos: não traduz "
-                        "nem gera arquivo (a detecção de idioma ainda gasta alguns caracteres)")
-    t.add_argument("--field", action="append", dest="only_fields", metavar="CAMPO",
-                   help="traduz SÓ este campo (ou TIPO_DE_NOTA:CAMPO); pode repetir")
-    t.add_argument("--skip-field", action="append", dest="skip_fields", metavar="CAMPO",
-                   help="NÃO traduz este campo (ou TIPO_DE_NOTA:CAMPO); pode repetir")
+                   help="only calculates how many texts and characters would be translated; "
+                        "does not translate or create a file (language detection still uses some characters)")
+    t.add_argument("--field", action="append", dest="only_fields", metavar="FIELD",
+                   help="translate ONLY this field (or NOTETYPE:FIELD); can be repeated")
+    t.add_argument("--skip-field", action="append", dest="skip_fields", metavar="FIELD",
+                   help="do NOT translate this field (or NOTETYPE:FIELD); can be repeated")
     t.add_argument("--sample", type=positive_int, default=SAMPLE, metavar="N",
-                   help=f"quantos textos de cada campo usar para detectar o idioma (padrão: {SAMPLE})")
+                   help=f"how many texts from each field to use for language detection (default: {SAMPLE})")
     t.add_argument("--min-ratio", type=ratio_type, default=MIN_RATIO, metavar="R",
-                   help=f"fração mínima (0 a 1) da amostra que precisa concordar no idioma "
-                        f"para o campo ser considerado seguro (padrão: {MIN_RATIO})")
-    t.add_argument("--cache-dir", metavar="PASTA",
-                   help="pasta onde ficam os arquivos de cache (padrão: a pasta do script)")
+                   help=f"minimum fraction (0 to 1) of the sample that must agree on the language "
+                        f"for the field to be considered reliable (default: {MIN_RATIO})")
+    t.add_argument("--cache-dir", metavar="FOLDER",
+                   help="folder for the cache files (default: the script's folder)")
 
     r = sub.add_parser(
         "reverse", parents=[io, run_opts],
-        help="inverte frente e verso dos cartões (sem tradução)",
-        description="Inverte frente e verso trocando os campos nos templates dos cartões. "
-                    "Saída padrão: <entrada>_reversed.apkg. Rodar de novo desfaz. "
-                    "Com -y: todos os tipos de nota (cloze não entra).")
-    r.add_argument("--notetype", action="append", metavar="NOME",
-                   help="inverte só este tipo de nota (pode repetir)")
-    r.add_argument("--swap", action="append", metavar="CAMPO1=CAMPO2",
-                   help="par de campos que trocam de lado; pode repetir (padrão: pares "
-                        "sugeridos para cada tipo de nota; veja o comando 'info')")
+        help="swap front and back of cards (no translation)",
+        description="Swaps front and back by exchanging the fields in the card templates. "
+                    "Default output: <input>_reversed.apkg. Running it again undoes the change. "
+                    "With -y: all note types (cloze is excluded).")
+    r.add_argument("--notetype", action="append", metavar="NAME",
+                   help="swap only this note type (can be repeated)")
+    r.add_argument("--swap", action="append", metavar="FIELD1=FIELD2",
+                   help="pair of fields that switch sides; can be repeated (default: pairs "
+                        "suggested for each note type; see the 'info' command)")
 
     sub.add_parser("info", parents=[io, common],
-                   help="mostra tipos de nota, campos e baralhos de um .apkg",
-                   description="Mostra tipos de nota, campos e baralhos de um .apkg "
-                               "(útil para escolher --notetype e --swap). Não gera arquivo.")
+                   help="shows note types, fields and decks of an .apkg",
+                   description="Shows note types, fields and decks of an .apkg "
+                               "(useful for choosing --notetype and --swap). Creates no file.")
     lg = sub.add_parser("langs", parents=[common],
-                        help="lista os idiomas do serviço de tradução (saída ou origem)")
-    lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICO",
-                    help=f"serviço de tradução (padrão: {DEFAULT_PROVIDER})")
+                        help="list the translation service's languages (target or source)")
+    lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
+                    help=f"translation service (default: {DEFAULT_PROVIDER})")
     lg.add_argument("--source", action="store_true",
-                    help="lista os idiomas de ORIGEM (os que o serviço reconhece) "
-                         "em vez dos de saída")
+                    help="list SOURCE languages (the ones the service recognizes) "
+                         "instead of the target ones")
 
     opts = p.parse_args(argv)
 
@@ -129,18 +129,18 @@ def parse_args(argv=None):
             old, eq, new = item.partition("=")
             old, new = old.strip(), new.strip()
             if not eq or not old or not new or SEP in old or SEP in new:
-                t.error(f"--deck-name inválido: '{item}'. Use ATUAL=NOVO (um nível, sem '{SEP}')")
+                t.error(f"invalid --deck-name: '{item}'. Use CURRENT=NEW (one level, no '{SEP}')")
             opts.deck_names[old] = new
         if opts.deck_names and opts.rename_decks == "none":
-            t.error("--deck-name não combina com --rename-decks none")
+            t.error("--deck-name cannot be combined with --rename-decks none")
         if opts.deck_method == "keep" and not opts.deck_names:
-            t.error("--deck-method keep exige pelo menos um --deck-name")
+            t.error("--deck-method keep requires at least one --deck-name")
         for attr, flag in (("only_fields", "--field"), ("skip_fields", "--skip-field")):
             specs = []
             for item in getattr(opts, attr) or []:
                 nt, _, fld = item.rpartition(":")
                 if not fld.strip():
-                    t.error(f"{flag} inválido: '{item}'. Use CAMPO ou TIPO_DE_NOTA:CAMPO")
+                    t.error(f"{flag} invalid: '{item}'. Use FIELD or NOTETYPE:FIELD")
                 specs.append((nt.strip() or None, fld.strip()))
             setattr(opts, attr, specs)
     elif opts.command == "reverse":
@@ -148,6 +148,6 @@ def parse_args(argv=None):
         for item in opts.swap or []:
             parts = [x.strip().lower() for x in item.split("=")]
             if len(parts) != 2 or not all(parts) or parts[0] == parts[1] or seen & set(parts):
-                r.error(f"--swap inválido: '{item}'. Use CAMPO1=CAMPO2, sem repetir campos")
+                r.error(f"--swap invalid: '{item}'. Use FIELD1=FIELD2, without repeating fields")
             seen.update(parts)
     return opts

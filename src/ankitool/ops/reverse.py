@@ -7,28 +7,28 @@ from ankitool.core.progress import Reporter
 
 @dataclass
 class ReverseConfig:
-    notetypes: list = None           # nomes de tipos de nota, ou None = todos/perguntar
-    swap: list = None                # ["Campo1=Campo2", ...]
+    notetypes: list = None           # note type names, or None = all / ask
+    swap: list = None                # ["Field1=Field2", ...]
 
 class CardReverser:
-    """Inverte frente e verso trocando, nos templates dos cartões, as referências a PARES de
-    campos ({{Palavra}} <-> {{Tradução}}). Vários pares são trocados de uma vez, o que é
-    necessário quando cada lado tem campos de áudio, frase etc. O conteúdo das notas não
-    muda e a operação é reversível: rodar de novo desfaz. Só entram tipos de nota padrão com
-    2+ campos (o tipo cloze, que tem um campo único, fica de fora)."""
+    """Swaps front and back by exchanging, in the card templates, the references to PAIRS of
+    fields ({{Word}} <-> {{Translation}}). Several pairs are swapped at once, which is needed when
+    each side has audio, sentence fields etc. The note content does not change and the operation
+    is reversible: running it again undoes it. Only standard note types with 2+ fields are included
+    (the cloze type, which has a single field, is left out)."""
 
     REF = re.compile(r"\{\{([#^/]?)((?:[^{}:]*:)*)([^{}:]+)\}\}")
-    STANDARD = 0                                         # no Anki, cloze é 1
+    STANDARD = 0                                         # in Anki, cloze is 1
 
     def __init__(self, anki, rep=None):
         self.anki, self.rep = anki, rep or Reporter()
-        self.counts = {}                                 # id do tipo de nota -> nº de notas
+        self.counts = {}                                 # note type id -> number of notes
 
     # ---- templates ----
     @classmethod
     def swap_refs(cls, tmpl, mapping):
-        """Troca as referências a campos num template, numa única passada, conforme
-        'mapping' ({A: B, B: A}). Preserva filtros e seções: {{type:A}}, {{#A}}...{{/A}}."""
+        """Swaps the field references in a template, in a single pass, according to
+        'mapping' ({A: B, B: A}). Preserves filters and sections: {{type:A}}, {{#A}}...{{/A}}."""
         def sub(m):
             prefix, filters, name = m.groups()
             new = mapping.get(name.strip())
@@ -39,7 +39,7 @@ class CardReverser:
 
     @classmethod
     def refs(cls, tmpl, names):
-        """Campos citados no template, na ordem em que aparecem."""
+        """Fields referenced in the template, in the order they appear."""
         seen = []
         for m in cls.REF.finditer(tmpl):
             n = m.group(3).strip()
@@ -49,7 +49,7 @@ class CardReverser:
 
     @classmethod
     def layout(cls, nt):
-        """(campos mostrados na frente, campos que só aparecem no verso), pelo 1º template."""
+        """(fields shown on the front, fields that only appear on the back), from the 1st template."""
         names = [f["name"] for f in nt["flds"]]
         t = nt["tmpls"][0]
         front = cls.refs(t["qfmt"], names)
@@ -58,10 +58,10 @@ class CardReverser:
 
     @classmethod
     def suggest_pairs(cls, nt):
-        """Pares de campos a trocar. 1º: por nome, quando o nome de um campo termina com o
-        de outro ('Word' / 'TranslationWord', 'WordAudio' / 'TranslationWordAudio').
-        2º: pelo layout do template (1º campo da frente / 1º campo só do verso).
-        3º: os dois primeiros campos."""
+        """Pairs of fields to swap. 1st: by name, when one field's name ends with another's
+        ('Word' / 'TranslationWord', 'WordAudio' / 'TranslationWordAudio').
+        2nd: by template layout (1st front field / 1st back-only field).
+        3rd: the first two fields."""
         names = [f["name"] for f in nt["flds"]]
         pairs, used = [], set()
         for a in names:
@@ -81,8 +81,8 @@ class CardReverser:
 
     @staticmethod
     def parse_pairs(raw, names):
-        """'A=B, C=D' -> [(A, B), (C, D)] com a grafia real dos campos; None se inválido
-        (campo inexistente, repetido ou pareado consigo mesmo)."""
+        """'A=B, C=D' -> [(A, B), (C, D)] using the real field spelling; None if invalid
+        (unknown field, repeated, or paired with itself)."""
         lower = {n.lower(): n for n in names}
         pairs, used = [], set()
         for item in re.split(r"[,;]+", raw):
@@ -96,20 +96,20 @@ class CardReverser:
             pairs.append((lower[parts[0]], lower[parts[1]]))
         return pairs or None
 
-    # ---- seleção ----
+    # ---- selection ----
     def eligible(self):
         out, skipped = [], 0
         for nt in self.anki.notetypes():
             n = self.anki.note_count(nt["id"])
             if n == 0:
-                continue                                 # tipos padrão do Anki sem notas
+                continue                                 # Anki's default types with no notes
             self.counts[nt["id"]] = n
             if nt["type"] == self.STANDARD and len(nt["flds"]) >= 2:
                 out.append(nt)
             else:
                 skipped += 1
         if skipped:
-            self.rep.log(f"tipos de nota ignorados (cloze ou com menos de 2 campos): {skipped}")
+            self.rep.log(f"note types skipped (cloze or fewer than 2 fields): {skipped}")
         return sorted(out, key=lambda nt: nt["name"].lower())
 
     def select_by_name(self, cands, names):
@@ -118,22 +118,22 @@ class CardReverser:
         missing = set(wanted) - {nt["name"].lower() for nt in chosen}
         if missing:
             raise ConfigError(
-                f"Tipo(s) de nota não encontrado(s): {', '.join(wanted[m] for m in sorted(missing))}. "
-                f"Disponíveis: {', '.join(nt['name'] for nt in cands)}")
+                f"Note type(s) not found: {', '.join(wanted[m] for m in sorted(missing))}. "
+                f"Available: {', '.join(nt['name'] for nt in cands)}")
         return chosen
 
     def pairs_for(self, nt, swap=None):
-        """Pares a trocar: os de 'swap' (["A=B"]) ou os sugeridos. None se 'swap' não serve."""
+        """Pairs to swap: those in 'swap' (["A=B"]) or the suggested ones. None if 'swap' doesn't fit."""
         if swap:
             names = [f["name"] for f in nt["flds"]]
             pairs = self.parse_pairs(",".join(swap), names)
             if not pairs:
-                self.rep.warn(f" {nt['name']}: não tem os campos de --swap; ignorado")
+                self.rep.warn(f" {nt['name']}: does not have the fields from --swap; skipped")
             return pairs
         return self.suggest_pairs(nt)
 
     def build_plan(self, cfg):
-        """Plano sem perguntas (uso como biblioteca / --yes): [(tipo_de_nota, pares)]."""
+        """Plan without questions (library use / --yes): [(note type, pairs)]."""
         cands = self.eligible()
         chosen = self.select_by_name(cands, cfg.notetypes) if cfg.notetypes else cands
         plan = []
@@ -143,7 +143,7 @@ class CardReverser:
                 plan.append((nt, pairs))
         return plan
 
-    # ---- aplicação ----
+    # ---- applying ----
     def apply(self, plan):
         models = self.anki.col.models
         save = getattr(models, "update_dict", None) or models.save
@@ -158,9 +158,9 @@ class CardReverser:
                 changed |= (q != t["qfmt"] or ans != t["afmt"])
                 t["qfmt"], t["afmt"] = q, ans
             if not changed:
-                self.rep.log(f" {nt['name']}: nenhum template usa os campos escolhidos; ignorado")
+                self.rep.log(f" {nt['name']}: no template uses the chosen fields; skipped")
                 continue
             save(nt)
             done += 1
-        self.rep.log(f"tipos de nota invertidos: {done}/{len(plan)}")
+        self.rep.log(f"note types reversed: {done}/{len(plan)}")
         return done

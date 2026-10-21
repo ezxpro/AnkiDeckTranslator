@@ -12,10 +12,10 @@ from ankitool.core.text import TextTools, h, lang_base
 
 @dataclass
 class TranslateConfig:
-    target: str                                          # já validado (client.resolve_target)
+    target: str                                          # already validated (client.resolve_target)
     sample: int = SAMPLE
     min_ratio: float = MIN_RATIO
-    only_fields: list = field(default_factory=list)      # [(tipo_de_nota|None, campo)]
+    only_fields: list = field(default_factory=list)      # [(note type|None, field)]
     skip_fields: list = field(default_factory=list)
     keep_scheduling: bool = False
     legacy: bool = True
@@ -25,12 +25,12 @@ class Estimate:
     texts: int
     chars: int
     cached: int
-    by_pair: dict                                        # (origem, saída) -> nº de textos
+    by_pair: dict                                        # (source, output) -> number of texts
 
 class FieldLanguageDetector:
-    """Detecta o idioma de cada campo por amostragem. Cache por texto (hash do texto simples):
-    textos já detectados antes não são reenviados. A amostra prioriza textos conhecidos,
-    então só textos realmente novos gastam caracteres."""
+    """Detects the language of each field by sampling. Cache per text (hash of the plain text):
+    texts already detected before are not sent again. The sample prefers known texts,
+    so only genuinely new texts spend characters."""
 
     def __init__(self, client, cache, target, rep, sample=SAMPLE):
         self.client, self.cache, self.target, self.sample = client, cache, target, sample
@@ -38,7 +38,7 @@ class FieldLanguageDetector:
 
     def detect(self, field_values):
         lang_cache = self.cache.lang
-        detected = {}                                    # (mid, campo) -> (idioma, proporção, exemplo)
+        detected = {}                                    # (mid, field) -> (language, ratio, example)
         sent = reused = 0
         for key, vs in field_values.items():
             self.rep.check_cancelled()
@@ -49,11 +49,11 @@ class FieldLanguageDetector:
             fresh = random.sample(unknown, min(max(self.sample - len(pick), 0), len(unknown)))
             if fresh:
                 if sent == 0:
-                    self.rep.log(f"detectando o idioma dos campos (amostra de até {self.sample} textos cada)...")
+                    self.rep.log(f"detecting field languages (sample of up to {self.sample} texts each)...")
                 langs = self.client.detect(fresh, self.target)
                 if langs is None:
-                    raise ProviderUnavailable(f"{self.client.label} fora do ar; rode de novo "
-                                              f"(o cache preserva o progresso).")
+                    raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
+                                              f"(the cache keeps your progress).")
                 for p, lang in zip(fresh, langs):
                     lang_cache[h(p)] = lang
                 sent += len(fresh)
@@ -65,19 +65,19 @@ class FieldLanguageDetector:
 
         if sent:
             self.cache.save()
-            self.rep.log(f"detecção de idioma: {sent} textos enviados, {reused} reaproveitados do cache")
+            self.rep.log(f"language detection: {sent} texts sent, {reused} reused from cache")
         else:
-            self.rep.log("idiomas já detectados antes (cache): nenhum caractere gasto na detecção")
+            self.rep.log("languages already detected (cache): no characters spent on detection")
         return detected
 
 class FieldTranslator:
-    """Traduz os campos escolhidos (cache por saída + origem + hash do texto)."""
+    """Translates the chosen fields (cache per output + source + text hash)."""
 
     def __init__(self, client, cache, rep):
         self.client, self.cache, self.rep = client, cache, rep
 
     def translate(self, chosen, field_values, dry_run=False):
-        todo = collections.defaultdict(list)             # (origem, saída) -> textos
+        todo = collections.defaultdict(list)             # (source, output) -> texts
         queued, cached = set(), set()
         for (mid, f), (L, T) in chosen.items():
             for v in field_values[(mid, f)]:
@@ -88,8 +88,8 @@ class FieldTranslator:
                     todo[(L, T)].append(v)
         chars = sum(len(self.client.mask(v)) for (_, _, v) in queued)
         est = Estimate(len(queued), chars, len(cached), {k: len(v) for k, v in todo.items()})
-        self.rep.log(f"a traduzir: {est.texts} textos (~{chars} caracteres); "
-                     f"já estavam no cache (sem custo): {est.cached}")
+        self.rep.log(f"to translate: {est.texts} texts (~{chars} characters); "
+                     f"already in cache (no cost): {est.cached}")
         if dry_run:
             return est
 
@@ -102,22 +102,22 @@ class FieldTranslator:
                 res = self.client.translate(chunk, target_lang=T, source_lang=L,
                                             protect_tags=True)
                 if res is None:
-                    raise ProviderUnavailable(f"{self.client.label} fora do ar; rode de novo "
-                                              f"(o cache preserva o progresso).")
+                    raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
+                                              f"(the cache keeps your progress).")
                 for src, r in zip(chunk, res):
                     out = r.text
                     ok = TextTools.PROT.findall(out) == TextTools.PROT.findall(src)
                     if ok:
                         self.cache.put(T, L, src, out)
                     else:
-                        # não grava no cache: o texto fica sem tradução salva e é retraduzido na próxima rodada
-                        self.rep.warn(" tag danificada, mantido original:", TextTools.plain(src)[:50])
+                        # not cached: this text has no saved translation and will be retried next run
+                        self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
                 self.cache.save()
                 self.rep.log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
         return est
 
 class TranslateOperation:
-    """Fluxo de tradução de um baralho, sem perguntas e sem print/input:
+    """Translation flow for one deck, with no questions and no print/input:
     open -> detect -> plan -> translate -> apply -> export -> close."""
 
     def __init__(self, client, cache, cfg, rep=None):
@@ -134,19 +134,19 @@ class TranslateOperation:
         if cfg.only_fields or cfg.skip_fields:
             before = len(self.anki.field_values)
             for nt, fld in self.anki.filter_fields(cfg.only_fields, cfg.skip_fields):
-                self.rep.warn(f"--field '{(nt + ':') if nt else ''}{fld}' não corresponde a nenhum campo")
-            self.rep.log(f"campos considerados: {len(self.anki.field_values)} de {before} "
-                         f"(por --field / --skip-field)")
+                self.rep.warn(f"--field '{(nt + ':') if nt else ''}{fld}' does not match any field")
+            self.rep.log(f"fields considered: {len(self.anki.field_values)} of {before} "
+                         f"(by --field / --skip-field)")
             if not self.anki.field_values:
-                raise ConfigError("Nenhum campo sobrou depois de --field/--skip-field. "
-                                  "Use o comando 'info' para ver os nomes dos campos.")
+                raise ConfigError("No fields left after --field/--skip-field. "
+                                  "Use the 'info' command to see the field names.")
 
     def detect(self):
         return FieldLanguageDetector(self.client, self.cache, self.target, self.rep,
                                      sample=self.cfg.sample).detect(self.anki.field_values)
 
     def language_options(self, detected):
-        """([(código, nº de campos)] que dá para traduzir, nº de campos já no idioma de saída)."""
+        """([(code, number of fields)] that can be translated, number of fields already in the output language)."""
         mr = self.cfg.min_ratio
         counts = collections.Counter(l for (l, r, _) in detected.values()
                                      if r >= mr and lang_base(l) != self.tbase)
@@ -156,15 +156,15 @@ class TranslateOperation:
 
     @staticmethod
     def validate_languages(raw, valid):
-        """'IT,EN' / 'all' / None -> conjunto de códigos; ConfigError se algum não existe."""
+        """'IT,EN' / 'all' / None -> set of codes; ConfigError if any doesn't exist."""
         raw = (raw or "all").upper()
         if raw == "ALL":
             return set(valid)
         picked = {t for t in re.split(r"[,\s;]+", raw) if t}
         bad = sorted(picked - set(valid))
         if bad:
-            raise ConfigError(f"Idioma(s) não detectado(s) nos campos: {', '.join(bad)}. "
-                              f"Detectados: {', '.join(valid)}")
+            raise ConfigError(f"Language(s) not detected in the fields: {', '.join(bad)}. "
+                              f"Detected: {', '.join(valid)}")
         return picked
 
     def plan(self, detected, picked):

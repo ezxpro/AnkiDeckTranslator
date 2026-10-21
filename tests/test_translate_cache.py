@@ -6,7 +6,7 @@ from ankitool.providers.base import TranslationResult
 
 
 class StubClient:
-    """Imita o contrato do provedor: mascara as tags, traduz e desmascara o resultado."""
+    """Mimics the provider contract: masks the tags, translates, and unmasks the result."""
     label = "stub"
     batch_size = 40
 
@@ -32,7 +32,7 @@ def _run(tmp_path, reply):
 
 
 def test_damaged_tags_are_not_cached(tmp_path):
-    # resposta que perde o [sound:...]: não pode ficar gravada como tradução
+    # reply that drops the [sound:...] must not be stored as a translation
     cache = _run(tmp_path, lambda t: "olá")
     assert cache.get("PT-BR", "IT", SRC) is None
 

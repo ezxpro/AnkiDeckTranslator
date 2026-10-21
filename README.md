@@ -26,9 +26,3 @@ Dependency direction: `core <- providers, cache <- anki <- ops <- cli` (and late
 Nothing below `cli/` may import `cli/` or call `print`/`input`.
 To add a translation service: create `providers/<name>.py` with a `@register_provider` class
 and import it in `providers/__init__.py`.
-
-## Requirements
-
-- Python 3.9 or newer.
-- The `anki` package is required for every command, because the CLI loads it at startup. `pip install -e .` installs it automatically.
-- A DeepL API key for real translations (`DEEPL_KEY` environment variable or a `.env` file). Use `--provider fake` to test without one.

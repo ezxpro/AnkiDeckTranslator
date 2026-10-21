@@ -11,6 +11,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SAMPLE, MIN_RATIO = 10, 0.6
 DEFAULT_PROVIDER = "deepl"
 SEP = "::"
+VERSION = "1.1.0"
+CACHE_DIR = SCRIPT_DIR                          # --cache-dir muda isto
 
 # ======================================================================
 # Utilitários de console
@@ -20,10 +22,17 @@ class Ui:
     Com Ui.auto = True (opção --yes), nenhuma pergunta é feita: vale o valor padrão."""
 
     auto = False
+    quiet = False                                      # --quiet: sem mensagens de andamento
 
     @staticmethod
     def log(*a):
-        print(time.strftime("%H:%M:%S"), *a, flush=True)
+        if not Ui.quiet:
+            print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+    @staticmethod
+    def warn(*a):
+        """Avisos importantes: aparecem mesmo com --quiet (vão para o stderr)."""
+        print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
 
     @staticmethod
     def ask(msg, default):
@@ -158,6 +167,9 @@ class Ui:
         """Percorre 'items' mostrando andamento. Em terminal atualiza a mesma linha;
         com saída redirecionada (log/arquivo) imprime a cada 10%."""
         total = len(items) if total is None else total
+        if Ui.quiet:
+            yield from items
+            return
         tty = sys.stdout.isatty()
         last, nxt = 0.0, 0.1
         for i, x in enumerate(items, 1):
@@ -461,7 +473,7 @@ class TranslationProvider(ABC):
 
     def cache_file(self, stem):
         tag = f"_{self.name}" if self.cache_tag is None else self.cache_tag
-        return SCRIPT_DIR / f"{stem}{tag}.json"
+        return CACHE_DIR / f"{stem}{tag}.json"
 
 @register_provider
 class DeepLProvider(TranslationProvider):
@@ -604,8 +616,9 @@ class DeckNameCache:
 class AnkiCollection:
     """Importa o .apkg, expõe notas/campos, aplica traduções e exporta."""
 
-    def __init__(self, src):
+    def __init__(self, src, keep_scheduling=False, legacy=True):
         self.src = Path(src)
+        self.keep_scheduling, self.legacy = keep_scheduling, legacy
         self.col = None
         self.notes = []
         self.model_names = {}                                  # mid -> nome do modelo
@@ -617,7 +630,9 @@ class AnkiCollection:
         self.col = Collection(str(db_path))
         with Heartbeat("importando baralho"):
             self.col.import_anki_package(ImportAnkiPackageRequest(
-                package_path=str(self.src), options=ImportAnkiPackageOptions()))
+                package_path=str(self.src), options=ImportAnkiPackageOptions(
+                    with_scheduling=self.keep_scheduling,
+                    with_deck_configs=self.keep_scheduling)))
 
     def load_notes(self):
         for nid in Ui.progress(self.col.find_notes(""), "carregando notas"):
@@ -629,6 +644,21 @@ class AnkiCollection:
                 if len(TextTools.plain(v)) >= 3:
                     self.field_values[(n.mid, f)].append(v)
         log("notas:", len(self.notes))
+
+    def filter_fields(self, only, skip):
+        """Tira de field_values os campos que não devem ser traduzidos (--field / --skip-field).
+        Cada item é (tipo_de_nota ou None, campo). Devolve os itens de 'only' sem correspondência."""
+        def match(specs, key):
+            mid, f = key
+            return any(fld.lower() == f.lower()
+                       and (nt is None or nt.lower() == self.model_names[mid].lower())
+                       for nt, fld in specs)
+        keys = list(self.field_values)
+        unmatched = [sp for sp in only if not any(match([sp], k) for k in keys)]
+        for k in keys:
+            if (only and not match(only, k)) or (skip and match(skip, k)):
+                del self.field_values[k]
+        return unmatched
 
     def apply_translations(self, chosen, cache):
         for n in Ui.progress(self.notes, "aplicando traduções"):
@@ -656,7 +686,8 @@ class AnkiCollection:
     def export(self, out_path):
         with Heartbeat("exportando"):
             self.col.export_anki_package(out_path=str(out_path), options=ExportAnkiPackageOptions(
-                with_scheduling=False, with_deck_configs=False, with_media=True, legacy=False),
+                with_scheduling=self.keep_scheduling, with_deck_configs=self.keep_scheduling,
+                with_media=True, legacy=self.legacy),
                 limit=None)
 
     def close(self):
@@ -671,8 +702,8 @@ class FieldLanguageDetector:
     textos já detectados antes não são reenviados. A amostra prioriza textos conhecidos,
     então só textos realmente novos gastam caracteres."""
 
-    def __init__(self, client, cache, target):
-        self.client, self.cache, self.target = client, cache, target
+    def __init__(self, client, cache, target, sample=SAMPLE):
+        self.client, self.cache, self.target, self.sample = client, cache, target, sample
 
     def detect(self, field_values):
         lang_cache = self.cache.lang
@@ -682,11 +713,11 @@ class FieldLanguageDetector:
             uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs))
             known = [p for p in uniq if h(p) in lang_cache]
             unknown = [p for p in uniq if h(p) not in lang_cache]
-            pick = random.sample(known, min(SAMPLE, len(known)))
-            fresh = random.sample(unknown, min(SAMPLE - len(pick), len(unknown)))
+            pick = random.sample(known, min(self.sample, len(known)))
+            fresh = random.sample(unknown, min(max(self.sample - len(pick), 0), len(unknown)))
             if fresh:
                 if sent == 0:
-                    log(f"detectando o idioma dos campos (amostra de até {SAMPLE} textos cada)...")
+                    log(f"detectando o idioma dos campos (amostra de até {self.sample} textos cada)...")
                 langs = self.client.detect(fresh, self.target)
                 if langs is None:
                     raise SystemExit(f"{self.client.label} fora do ar; rode de novo "
@@ -716,7 +747,7 @@ class FieldTranslator:
     def __init__(self, client, cache):
         self.client, self.cache = client, cache
 
-    def translate(self, chosen, field_values):
+    def translate(self, chosen, field_values, dry_run=False):
         todo = collections.defaultdict(list)             # (origem, saída) -> textos
         queued, cached = set(), set()
         for (mid, f), (L, T) in chosen.items():
@@ -729,6 +760,15 @@ class FieldTranslator:
         chars = sum(len(self.client.mask(v)) for (_, _, v) in queued)
         log(f"a traduzir: {len(queued)} textos (~{chars} caracteres); "
             f"já estavam no cache (sem custo): {len(cached)}")
+
+        if dry_run:
+            print("\n=== Simulação (--dry-run) ===")
+            print(f"Textos que seriam enviados: {len(queued)}")
+            print(f"Caracteres estimados: ~{chars}")
+            print(f"Já no cache (sem custo): {len(cached)}")
+            for (L, T), texts in todo.items():
+                print(f"  {L} -> {T}: {len(texts)} textos")
+            return chars
 
         for (L, T), texts in todo.items():
             texts = sorted(texts)
@@ -744,7 +784,7 @@ class FieldTranslator:
                     out = r.text
                     ok = TextTools.PROT.findall(out) == TextTools.PROT.findall(src)
                     if not ok:
-                        log(" tag danificada, mantido original:", TextTools.plain(src)[:50])
+                        Ui.warn(" tag danificada, mantido original:", TextTools.plain(src)[:50])
                     self.cache.put(T, L, src, out if ok else src)
                 self.cache.save()
                 log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
@@ -807,7 +847,7 @@ class DeckRenamer:
             chunk = pending[i:i + step]
             res = self.client.translate(chunk, target_lang=self.target, source_lang=src_lang)
             if res is None:
-                log(f"{self.client.label} fora do ar; nomes restantes ficam como estão")
+                Ui.warn(f"{self.client.label} fora do ar; nomes restantes ficam como estão")
                 break
             for s, r in zip(chunk, res):
                 already = lang_base(r.detected_source_lang) == self.tbase  # já no idioma de saída
@@ -921,7 +961,7 @@ class DeckRenamer:
                 decks_api.rename(did, new)               # principais antes dos secundários
                 done += 1
             except Exception as e:
-                log(f" não consegui renomear '{old}': {e}")
+                Ui.warn(f" não consegui renomear '{old}': {e}")
         log(f"baralhos renomeados: {done}/{len(plan)}")
 
 # ======================================================================
@@ -933,6 +973,11 @@ class AnkiTranslatorApp:
     def __init__(self, opts):
         self.opts = opts
         Ui.auto = opts.yes
+        global CACHE_DIR
+        if opts.cache_dir:
+            CACHE_DIR = Path(opts.cache_dir).expanduser().resolve()
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.sample, self.min_ratio = opts.sample, opts.min_ratio
         self.client = choose_provider(opts)
         usage = self.client.usage()
         if usage is not None:
@@ -978,7 +1023,7 @@ class AnkiTranslatorApp:
             if mid != cur:
                 print(f"\n{self.anki.model_names[mid]}")
                 cur = mid
-            label = lang if ratio >= MIN_RATIO else f"{lang}? (incerto)"
+            label = lang if ratio >= self.min_ratio else f"{lang}? (incerto)"
             print(f" {f}: {label} ({ratio:.0%}) ex.: {ex}")
 
     def _languages_from_args(self, valid):
@@ -996,9 +1041,9 @@ class AnkiTranslatorApp:
     def ask_languages(self, detected):
         counts = collections.Counter(
             lang for (lang, ratio, _) in detected.values()
-            if ratio >= MIN_RATIO and lang_base(lang) != self.tbase)
+            if ratio >= self.min_ratio and lang_base(lang) != self.tbase)
         already = sum(1 for (lang, ratio, _) in detected.values()
-                      if ratio >= MIN_RATIO and lang_base(lang) == self.tbase)
+                      if ratio >= self.min_ratio and lang_base(lang) == self.tbase)
         options = counts.most_common()
         if not options:
             self.anki.close()
@@ -1031,23 +1076,48 @@ class AnkiTranslatorApp:
 
     # ---- fluxo ----
     def run(self):
-        src, out = self.ask_paths()
+        if self.opts.dry_run:                            # simulação: não gera arquivo
+            src, out = ask_input(self.opts), None
+        else:
+            src, out = self.ask_paths()
         self.ask_target()
 
-        self.anki = AnkiCollection(src)
+        self.anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy)
         self.anki.import_package()
         self.anki.load_notes()
 
-        detector = FieldLanguageDetector(self.client, self.cache, self.target)
+        if self.opts.only_fields or self.opts.skip_fields:
+            before = len(self.anki.field_values)
+            for nt, fld in self.anki.filter_fields(self.opts.only_fields, self.opts.skip_fields):
+                Ui.warn(f"--field '{(nt + ':') if nt else ''}{fld}' não corresponde a nenhum campo")
+            log(f"campos considerados: {len(self.anki.field_values)} de {before} "
+                f"(por --field / --skip-field)")
+            if not self.anki.field_values:
+                self.anki.close()
+                raise SystemExit("Nenhum campo sobrou depois de --field/--skip-field. "
+                                 "Use o comando 'info' para ver os nomes dos campos.")
+
+        detector = FieldLanguageDetector(self.client, self.cache, self.target,
+                                         sample=self.sample)
         detected = detector.detect(self.anki.field_values)
         self.show_detected(detected)
 
         picked = self.ask_languages(detected)
         chosen = {k: (lang, self.target) for k, (lang, ratio, _) in detected.items()
-                  if lang in picked and ratio >= MIN_RATIO}
+                  if lang in picked and ratio >= self.min_ratio}
         log("idiomas escolhidos:", ", ".join(sorted(picked)), f"-> {len(chosen)} campos")
 
-        FieldTranslator(self.client, self.cache).translate(chosen, self.anki.field_values)
+        dry = self.opts.dry_run
+        FieldTranslator(self.client, self.cache).translate(chosen, self.anki.field_values,
+                                                           dry_run=dry)
+        if dry:
+            usage = self.client.usage()
+            if usage is not None:
+                print(f"Uso atual do {self.client.label}: {usage}")
+            print("(A detecção de idioma já gastou alguns caracteres.)")
+            print("Nada foi traduzido nem exportado (--dry-run).")
+            self.anki.close()
+            return
         self.anki.apply_translations(chosen, self.cache)
 
         DeckRenamer(self.anki, self.client, self.target, picked, self.deck_cache,
@@ -1055,7 +1125,7 @@ class AnkiTranslatorApp:
 
         self.anki.export(out)
         self.anki.close()
-        log("pronto ->", out)
+        print("pronto ->", out)
         usage = self.client.usage()
         if usage is not None:
             log(f"uso {self.client.label} ao final:", usage)
@@ -1099,9 +1169,12 @@ def ask_paths(opts, suffix="_out"):
         out = out.with_name(out.name + ".apkg")
     if out == src:
         raise SystemExit("O arquivo novo não pode ter o mesmo nome do original.")
-    if out.exists() and not Ui.auto and not opts.output and not Ui.yes(
-            f"\nJá existe um arquivo chamado '{out.name}'. Quer substituí-lo?", "n"):
-        raise SystemExit("Cancelado: rode de novo e escolha outro nome.")
+    if out.exists() and not opts.force:
+        if Ui.auto:
+            raise SystemExit(f"O arquivo '{out}' já existe. Use --force para substituí-lo "
+                             f"ou escolha outro nome com -o.")
+        if not Ui.yes(f"\nJá existe um arquivo chamado '{out.name}'. Quer substituí-lo?", "n"):
+            raise SystemExit("Cancelado: rode de novo e escolha outro nome.")
     return src, out
 
 class CardReverser:
@@ -1246,7 +1319,7 @@ class CardReverser:
         if self.opts.swap:
             pairs = self.parse_pairs(",".join(self.opts.swap), names)
             if not pairs:
-                log(f" {nt['name']}: não tem os campos de --swap; ignorado")
+                Ui.warn(f" {nt['name']}: não tem os campos de --swap; ignorado")
             return pairs
         pairs = self.suggest_pairs(nt)
         if Ui.auto or len(names) == 2:                    # com 2 campos não há o que escolher
@@ -1333,14 +1406,14 @@ class ReverseApp:
             print("O texto das suas notas não muda: só muda o jeito de mostrar.")
             print("Se rodar de novo no arquivo novo, tudo volta ao que era.")
         src, out = ask_paths(self.opts, suffix="_reversed")
-        anki = AnkiCollection(src)
+        anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy)
         anki.import_package()
         if not CardReverser(anki, self.opts).run():
             anki.close()
             raise SystemExit("Nada foi invertido; nenhum arquivo gerado.")
         anki.export(out)
         anki.close()
-        log("pronto ->", out)
+        print("pronto ->", out)
 
 class InfoApp:
     """Comando info: mostra tipos de nota, campos e baralhos do .apkg (não gera arquivo)."""
@@ -1384,9 +1457,27 @@ MENU = {"1": ("translate", "Traduzir um baralho",
         "0": ("exit", "Sair", None)}
 BACK_TO_MENU = "\nQuer fazer mais alguma coisa?\n  (s = voltar ao menu principal, n = fechar o programa)"
 
+def positive_int(s):
+    try:
+        v = int(s)
+    except ValueError:
+        v = 0
+    if v < 1:
+        raise argparse.ArgumentTypeError(f"'{s}' não é um número inteiro maior que zero")
+    return v
+
+def ratio_type(s):
+    try:
+        v = float(s.replace(",", "."))
+    except ValueError:
+        v = 0.0
+    if not 0 < v <= 1:
+        raise argparse.ArgumentTypeError(f"'{s}' não está entre 0 e 1 (ex.: 0.6)")
+    return v
+
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help"):
+    if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "-V", "--version"):
         argv.insert(0, "translate")                      # atalho: script deck.apkg -t PT-BR
 
     p = argparse.ArgumentParser(
@@ -1395,14 +1486,27 @@ def parse_args(argv=None):
                     "modo interativo (menu). Use 'COMANDO -h' para ver as opções de cada comando.",
         epilog="Em qualquer comando, o que não for informado por opção é perguntado, "
                "a menos que -y/--yes seja usado.")
+    p.add_argument("-V", "--version", action="version", version=f"%(prog)s {VERSION}")
     sub = p.add_subparsers(dest="command", metavar="COMANDO")
 
     io = argparse.ArgumentParser(add_help=False)
     io.add_argument("input", nargs="?", metavar="ENTRADA", help="arquivo .apkg de entrada")
-    run_opts = argparse.ArgumentParser(add_help=False)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-y", "--yes", action="store_true",
+                        help="não perguntar nada: usa os padrões de cada comando")
+    common.add_argument("-q", "--quiet", action="store_true",
+                        help="só mostra avisos e o resultado final (sem mensagens de andamento)")
+    run_opts = argparse.ArgumentParser(add_help=False, parents=[common])
     run_opts.add_argument("-o", "--output", metavar="SAIDA", help="arquivo .apkg de saída")
-    run_opts.add_argument("-y", "--yes", action="store_true",
-                          help="não perguntar nada: usa os padrões de cada comando")
+    run_opts.add_argument("-f", "--force", action="store_true",
+                          help="substitui o arquivo de saída se ele já existir "
+                               "(sem isto, com -y o programa para com erro)")
+    run_opts.add_argument("--keep-scheduling", action="store_true",
+                          help="mantém o histórico de estudo (datas, intervalos) e as opções "
+                               "dos baralhos no arquivo gerado (padrão: removidos)")
+    run_opts.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=True,
+                          help="formato antigo do .apkg, aceito por qualquer versão do Anki/"
+                               "AnkiDroid (padrão); --no-legacy gera o formato novo, menor")
 
     t = sub.add_parser(
         "translate", parents=[io, run_opts],
@@ -1427,6 +1531,20 @@ def parse_args(argv=None):
     t.add_argument("--deck-name", action="append", metavar="ATUAL=NOVO",
                    help="renomeia o baralho de nome ATUAL (um nível, sem '::') para NOVO; "
                         "pode repetir. Sem -d/-m, só estes são renomeados")
+    t.add_argument("--dry-run", action="store_true",
+                   help="só calcula quantos textos e caracteres seriam traduzidos: não traduz "
+                        "nem gera arquivo (a detecção de idioma ainda gasta alguns caracteres)")
+    t.add_argument("--field", action="append", dest="only_fields", metavar="CAMPO",
+                   help="traduz SÓ este campo (ou TIPO_DE_NOTA:CAMPO); pode repetir")
+    t.add_argument("--skip-field", action="append", dest="skip_fields", metavar="CAMPO",
+                   help="NÃO traduz este campo (ou TIPO_DE_NOTA:CAMPO); pode repetir")
+    t.add_argument("--sample", type=positive_int, default=SAMPLE, metavar="N",
+                   help=f"quantos textos de cada campo usar para detectar o idioma (padrão: {SAMPLE})")
+    t.add_argument("--min-ratio", type=ratio_type, default=MIN_RATIO, metavar="R",
+                   help=f"fração mínima (0 a 1) da amostra que precisa concordar no idioma "
+                        f"para o campo ser considerado seguro (padrão: {MIN_RATIO})")
+    t.add_argument("--cache-dir", metavar="PASTA",
+                   help="pasta onde ficam os arquivos de cache (padrão: a pasta do script)")
 
     r = sub.add_parser(
         "reverse", parents=[io, run_opts],
@@ -1440,13 +1558,17 @@ def parse_args(argv=None):
                    help="par de campos que trocam de lado; pode repetir (padrão: pares "
                         "sugeridos para cada tipo de nota; veja o comando 'info')")
 
-    sub.add_parser("info", parents=[io],
+    sub.add_parser("info", parents=[io, common],
                    help="mostra tipos de nota, campos e baralhos de um .apkg",
                    description="Mostra tipos de nota, campos e baralhos de um .apkg "
                                "(útil para escolher --notetype e --swap). Não gera arquivo.")
-    lg = sub.add_parser("langs", help="lista os idiomas de saída do serviço de tradução")
+    lg = sub.add_parser("langs", parents=[common],
+                        help="lista os idiomas do serviço de tradução (saída ou origem)")
     lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICO",
                     help=f"serviço de tradução (padrão: {DEFAULT_PROVIDER})")
+    lg.add_argument("--source", action="store_true",
+                    help="lista os idiomas de ORIGEM (os que o serviço reconhece) "
+                         "em vez dos de saída")
 
     opts = p.parse_args(argv)
 
@@ -1462,6 +1584,14 @@ def parse_args(argv=None):
             t.error("--deck-name não combina com --rename-decks none")
         if opts.deck_method == "keep" and not opts.deck_names:
             t.error("--deck-method keep exige pelo menos um --deck-name")
+        for attr, flag in (("only_fields", "--field"), ("skip_fields", "--skip-field")):
+            specs = []
+            for item in getattr(opts, attr) or []:
+                nt, _, fld = item.rpartition(":")
+                if not fld.strip():
+                    t.error(f"{flag} inválido: '{item}'. Use CAMPO ou TIPO_DE_NOTA:CAMPO")
+                specs.append((nt.strip() or None, fld.strip()))
+            setattr(opts, attr, specs)
     elif opts.command == "reverse":
         seen = set()
         for item in opts.swap or []:
@@ -1472,10 +1602,12 @@ def parse_args(argv=None):
     return opts
 
 def main(argv=None):
+    from_menu = False                                    # só volta ao menu quem começou por ele
     while True:
         try:
             opts = parse_args(argv)
             if getattr(opts, "command", None) is None:
+                from_menu = True
                 options = {k: (v[1], v[2]) for k, v in MENU.items()}
                 key = Ui.choose("O que você quer fazer?", options, "1")
                 if key == "0":
@@ -1483,29 +1615,43 @@ def main(argv=None):
                 opts = parse_args([MENU[key][0]])
 
             Ui.auto = getattr(opts, "yes", False)
+            Ui.quiet = getattr(opts, "quiet", False)
 
             if opts.command == "reverse":
                 ReverseApp(opts).run()
             elif opts.command == "info":
                 InfoApp(opts).run()
             elif opts.command == "langs":
-                Ui.show_langs("Idiomas de saída disponíveis (código e nome):",
-                              choose_provider(opts).target_langs)
+                provider = choose_provider(opts)
+                if opts.source:
+                    Ui.show_langs("Idiomas de origem que o serviço reconhece (código e nome):",
+                                  provider.source_langs)
+                else:
+                    Ui.show_langs("Idiomas de saída disponíveis (código e nome):",
+                                  provider.target_langs)
             elif opts.command != "exit":
                 AnkiTranslatorApp(opts).run()
 
-            if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
+            if not from_menu or Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
                 break
             argv = []  # Reseta os argumentos para forçar o menu interativo na próxima iteração
 
         except SystemExit as e:
-            if str(e) and str(e) != "0":
-                print(f"\n[Aviso] {e}")
+            msg = e.code if isinstance(e.code, str) else ""
+            if msg:
+                print(f"\n[Aviso] {msg}", file=sys.stdout if from_menu else sys.stderr)
+            if not from_menu:                            # linha de comando: sai com código
+                sys.exit(1 if msg else (e.code or 0))
             if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
                 break
             argv = []
+        except KeyboardInterrupt:
+            print("\nInterrompido.")
+            sys.exit(130)
         except Exception as e:
-            print(f"\n[Erro Inesperado] {e}")
+            print(f"\n[Erro Inesperado] {e}", file=sys.stdout if from_menu else sys.stderr)
+            if not from_menu:
+                sys.exit(1)
             if Ui.auto or not Ui.yes(BACK_TO_MENU, "s"):
                 break
             argv = []

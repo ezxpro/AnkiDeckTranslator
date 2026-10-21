@@ -2,7 +2,7 @@
 
 import argparse, json, os, re, sys, time, random, tempfile, collections, hashlib, threading
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from anki.collection import (Collection, ImportAnkiPackageRequest,
                              ImportAnkiPackageOptions, ExportAnkiPackageOptions)
@@ -12,7 +12,6 @@ SAMPLE, MIN_RATIO = 10, 0.6
 DEFAULT_PROVIDER = "deepl"
 SEP = "::"
 VERSION = "1.1.0"
-CACHE_DIR = SCRIPT_DIR                          # --cache-dir muda isto
 
 
 class AnkiToolError(Exception):
@@ -26,6 +25,17 @@ class ProviderUnavailable(AnkiToolError):
 
 class Cancelled(AnkiToolError):
     """A operação foi cancelada."""
+
+@dataclass
+class RenameConfig:
+    mode: str = None                 # None = perguntar | none | main | all
+    method: str = None               # auto | manual | review | keep
+    names: dict = field(default_factory=dict)      # ATUAL -> NOVO
+
+@dataclass
+class ReverseConfig:
+    notetypes: list = None           # nomes de tipos de nota, ou None = todos/perguntar
+    swap: list = None                # ["Campo1=Campo2", ...]
 
 class CancelToken:
     def __init__(self):
@@ -516,9 +526,9 @@ class TranslationProvider(ABC):
         """Texto digitado -> código de saída válido (grafia do serviço), ou None."""
         return self._target_by_norm.get((raw or "").strip().upper())
 
-    def cache_file(self, stem):
+    def cache_file(self, stem, cache_dir):
         tag = f"_{self.name}" if self.cache_tag is None else self.cache_tag
-        return CACHE_DIR / f"{stem}{tag}.json"
+        return Path(cache_dir) / f"{stem}{tag}.json"
 
 @register_provider
 class DeepLProvider(TranslationProvider):
@@ -849,9 +859,9 @@ class DeckRenamer:
     Baralhos principais são os de primeiro nível; baralhos secundários são os que
     ficam dentro de outro baralho (separados por '::')."""
 
-    def __init__(self, anki, client, target, picked, cache, opts, rep):
+    def __init__(self, anki, client, target, picked, cache, cfg, rep):
         self.rep = rep
-        self.opts = opts
+        self.cfg = cfg
         self.anki, self.client = anki, client
         self.target, self.tbase = target, lang_base(target)
         self.picked = picked
@@ -910,7 +920,7 @@ class DeckRenamer:
 
     def build_newseg(self, selected, method, src_lang):
         ordered = sorted(selected, key=lambda p: tuple(s.lower() for s in p))
-        overrides = self.opts.deck_names                 # --deck-name ATUAL=NOVO: sempre vence
+        overrides = self.cfg.names                 # --deck-name ATUAL=NOVO: sempre vence
         auto = {}
         if method in ("1", "3"):
             auto = self.auto_names({p[-1] for p in selected if p[-1] not in overrides}, src_lang)
@@ -947,7 +957,7 @@ class DeckRenamer:
     # ---- fluxo principal ----
     def run(self):
         # None = perguntar; none/main/all. --deck-name sozinho implica escopo "all"
-        self.mode = mode = self.opts.rename_decks or ("all" if self.opts.deck_names else None)
+        self.mode = mode = self.cfg.mode or ("all" if self.cfg.names else None)
         decks = self.anki.deck_list()
         if mode == "none" or not decks:
             return
@@ -962,7 +972,7 @@ class DeckRenamer:
         src_lang = next(iter(self.picked)) if len(self.picked) == 1 else None
         # método fixo por opção; se o escopo veio por opção, o padrão é automático
         fixed_method = {"auto": "1", "manual": "2", "review": "3", "keep": "0"}.get(
-            self.opts.deck_method) or ("0" if self.opts.deck_names else "1" if mode else None)
+            self.cfg.method) or ("0" if self.cfg.names else "1" if mode else None)
 
         while True:
             method = fixed_method or Ui.choose(
@@ -1027,18 +1037,17 @@ class AnkiTranslatorApp:
         self.opts = opts
         Ui.auto = opts.yes
         self.rep = ConsoleReporter(quiet=opts.quiet)
-        global CACHE_DIR
-        if opts.cache_dir:
-            CACHE_DIR = Path(opts.cache_dir).expanduser().resolve()
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.cache_dir = (Path(opts.cache_dir).expanduser().resolve()
+                          if opts.cache_dir else SCRIPT_DIR)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.sample, self.min_ratio = opts.sample, opts.min_ratio
         self.client = choose_provider(opts)
         usage = self.client.usage()
         if usage is not None:
             self.rep.log(f"uso atual {self.client.label}:", usage)
-        self.cache = TranslationCache(self.client.cache_file("cache"),
+        self.cache = TranslationCache(self.client.cache_file("cache", self.cache_dir),
                                       self.client.target_codes, self.rep)
-        self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache"), self.rep)
+        self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache", self.cache_dir), self.rep)
         self.rep.log(f"cache: {self.cache.count()} traduções e {len(self.cache.lang)} idiomas "
                      f"de texto guardados em {self.cache.path}")
         self.anki = None
@@ -1172,7 +1181,8 @@ class AnkiTranslatorApp:
             self.anki.apply_translations(chosen, self.cache)
 
             DeckRenamer(self.anki, self.client, self.target, picked, self.deck_cache,
-                        self.opts, self.rep).run()
+                        RenameConfig(self.opts.rename_decks, self.opts.deck_method,
+                                     self.opts.deck_names), self.rep).run()
 
             self.anki.export(out)
             print("pronto ->", out)
@@ -1238,8 +1248,8 @@ class CardReverser:
     REF = re.compile(r"\{\{([#^/]?)((?:[^{}:]*:)*)([^{}:]+)\}\}")
     STANDARD = 0                                         # no Anki, cloze é 1
 
-    def __init__(self, anki, opts, rep):
-        self.anki, self.opts, self.rep = anki, opts, rep
+    def __init__(self, anki, rep=None):
+        self.anki, self.rep = anki, rep or Reporter()
         self.counts = {}                                 # id do tipo de nota -> nº de notas
 
     # ---- templates ----
@@ -1330,71 +1340,36 @@ class CardReverser:
             self.rep.log(f"tipos de nota ignorados (cloze ou com menos de 2 campos): {skipped}")
         return sorted(out, key=lambda nt: nt["name"].lower())
 
-    def pick_notetypes(self, cands):
-        if self.opts.notetype:
-            wanted = {n.lower(): n for n in self.opts.notetype}
-            chosen = [nt for nt in cands if nt["name"].lower() in wanted]
-            missing = set(wanted) - {nt["name"].lower() for nt in chosen}
-            if missing:
-                raise ConfigError(
-                    f"Tipo(s) de nota não encontrado(s): {', '.join(wanted[m] for m in sorted(missing))}. "
-                    f"Disponíveis: {', '.join(nt['name'] for nt in cands)}")
-        if Ui.auto:
-            return cands
-        labels = [f"{nt['name']}  ({self.counts[nt['id']]} notas, {len(nt['flds'])} campos)"
-                  for nt in cands]
-        idx = Ui.select(
-            "Quais tipos de nota você quer inverter?", labels, multi=True, default="all",
-            intro=("Um 'tipo de nota' é o modelo dos seus cartões (por exemplo: Básico, Vocabulário).\n"
-                   "Cada tipo tem 'campos', como Palavra e Tradução. Os números entre parênteses\n"
-                   "dizem quantas notas usam esse tipo."))
-        return [] if idx is None else [cands[i] for i in idx]
+    def select_by_name(self, cands, names):
+        wanted = {n.lower(): n for n in names}
+        chosen = [nt for nt in cands if nt["name"].lower() in wanted]
+        missing = set(wanted) - {nt["name"].lower() for nt in chosen}
+        if missing:
+            raise ConfigError(
+                f"Tipo(s) de nota não encontrado(s): {', '.join(wanted[m] for m in sorted(missing))}. "
+                f"Disponíveis: {', '.join(nt['name'] for nt in cands)}")
+        return chosen
 
-    def show_layout(self, nt, pairs):
-        front, back = self.layout(nt)
-        paired = {n for p in pairs for n in p}
-        stay = [f["name"] for f in nt["flds"] if f["name"] not in paired]
-        print(f"\n Tipo de nota: {nt['name']} ({self.counts[nt['id']]} notas)")
-        print(f"   Hoje a FRENTE do cartão mostra: {', '.join(front) or '-'}")
-        print(f"   Hoje o VERSO do cartão mostra:  {', '.join(back) or '-'}")
-        print("   Para inverter, eu trocaria de lugar estes campos:")
-        for a, b in pairs:
-            print(f"     {a}  <->  {b}")
-        if stay:
-            print(f"   Estes não mudam de lado: {', '.join(stay)}")
-
-    def pick_pairs(self, nt):
-        names = [f["name"] for f in nt["flds"]]
-        if self.opts.swap:
-            pairs = self.parse_pairs(",".join(self.opts.swap), names)
+    def pairs_for(self, nt, swap=None):
+        """Pares a trocar: os de 'swap' (["A=B"]) ou os sugeridos. None se 'swap' não serve."""
+        if swap:
+            names = [f["name"] for f in nt["flds"]]
+            pairs = self.parse_pairs(",".join(swap), names)
             if not pairs:
                 self.rep.warn(f" {nt['name']}: não tem os campos de --swap; ignorado")
             return pairs
-        pairs = self.suggest_pairs(nt)
-        if Ui.auto or len(names) == 2:                    # com 2 campos não há o que escolher
-            return pairs
-        self.show_layout(nt, pairs)
-        key = Ui.choose(
-            f"O que fazer com o tipo '{nt['name']}'?",
-            {"1": ("Usar a troca sugerida acima", "É o que eu recomendo na maioria dos casos."),
-             "2": ("Digitar outros pares de campos",
-                   "Você diz quais campos trocam de lugar."),
-             "0": ("Pular este tipo de nota", "Ele não será invertido.")}, "1")
-        if key == "1":
-            return pairs
-        if key == "0":
-            return None
-        print(f"\nDigite os pares assim: Campo1=Campo2 (para vários, separe por vírgula).")
-        print(f"Exemplo: {names[0]}={names[1]}")
-        print(f"Campos deste tipo: {', '.join(names)}")
-        while True:
-            raw = input("Pares (ou 0 para pular este tipo): ").strip()
-            if raw == "0":
-                return None
-            custom = self.parse_pairs(raw, names)
-            if custom:
-                return custom
-            print(f"  Pares inválidos. Use só nomes de campos deste tipo: {', '.join(names)}")
+        return self.suggest_pairs(nt)
+
+    def build_plan(self, cfg):
+        """Plano sem perguntas (uso como biblioteca / --yes): [(tipo_de_nota, pares)]."""
+        cands = self.eligible()
+        chosen = self.select_by_name(cands, cfg.notetypes) if cfg.notetypes else cands
+        plan = []
+        for nt in chosen:
+            pairs = self.pairs_for(nt, cfg.swap)
+            if pairs:
+                plan.append((nt, pairs))
+        return plan
 
     # ---- aplicação ----
     def apply(self, plan):
@@ -1418,11 +1393,74 @@ class CardReverser:
         self.rep.log(f"tipos de nota invertidos: {done}/{len(plan)}")
         return done
 
+class ReverseCli:
+    """Perguntas e textos do comando 'reverse'. Toda a lógica está em CardReverser."""
+
+    def __init__(self, rev, cfg):
+        self.rev, self.cfg = rev, cfg
+
+    def pick_notetypes(self, cands):
+        if self.cfg.notetypes:
+            return self.rev.select_by_name(cands, self.cfg.notetypes)
+        if Ui.auto:
+            return cands
+        labels = [f"{nt['name']}  ({self.rev.counts[nt['id']]} notas, {len(nt['flds'])} campos)"
+                  for nt in cands]
+        idx = Ui.select(
+            "Quais tipos de nota você quer inverter?", labels, multi=True, default="all",
+            intro=("Um 'tipo de nota' é o modelo dos seus cartões (por exemplo: Básico, Vocabulário).\n"
+                   "Cada tipo tem 'campos', como Palavra e Tradução. Os números entre parênteses\n"
+                   "dizem quantas notas usam esse tipo."))
+        return [] if idx is None else [cands[i] for i in idx]
+
+    def show_layout(self, nt, pairs):
+        front, back = CardReverser.layout(nt)
+        paired = {n for p in pairs for n in p}
+        stay = [f["name"] for f in nt["flds"] if f["name"] not in paired]
+        print(f"\n Tipo de nota: {nt['name']} ({self.rev.counts[nt['id']]} notas)")
+        print(f"   Hoje a FRENTE do cartão mostra: {', '.join(front) or '-'}")
+        print(f"   Hoje o VERSO do cartão mostra:  {', '.join(back) or '-'}")
+        print("   Para inverter, eu trocaria de lugar estes campos:")
+        for a, b in pairs:
+            print(f"     {a}  <->  {b}")
+        if stay:
+            print(f"   Estes não mudam de lado: {', '.join(stay)}")
+
+    def pick_pairs(self, nt):
+        names = [f["name"] for f in nt["flds"]]
+        if self.cfg.swap:
+            return self.rev.pairs_for(nt, self.cfg.swap)
+        pairs = self.rev.suggest_pairs(nt)
+        if Ui.auto or len(names) == 2:                    # com 2 campos não há o que escolher
+            return pairs
+        self.show_layout(nt, pairs)
+        key = Ui.choose(
+            f"O que fazer com o tipo '{nt['name']}'?",
+            {"1": ("Usar a troca sugerida acima", "É o que eu recomendo na maioria dos casos."),
+             "2": ("Digitar outros pares de campos",
+                   "Você diz quais campos trocam de lugar."),
+             "0": ("Pular este tipo de nota", "Ele não será invertido.")}, "1")
+        if key == "1":
+            return pairs
+        if key == "0":
+            return None
+        print("\nDigite os pares assim: Campo1=Campo2 (para vários, separe por vírgula).")
+        print(f"Exemplo: {names[0]}={names[1]}")
+        print(f"Campos deste tipo: {', '.join(names)}")
+        while True:
+            raw = input("Pares (ou 0 para pular este tipo): ").strip()
+            if raw == "0":
+                return None
+            custom = CardReverser.parse_pairs(raw, names)
+            if custom:
+                return custom
+            print(f"  Pares inválidos. Use só nomes de campos deste tipo: {', '.join(names)}")
+
     def run(self):
         """Devolve quantos tipos de nota foram invertidos."""
-        cands = self.eligible()
+        cands = self.rev.eligible()
         if not cands:
-            self.rep.log("nenhum tipo de nota com frente e verso para inverter")
+            self.rev.rep.log("nenhum tipo de nota com frente e verso para inverter")
             return 0
         plan = []
         for nt in self.pick_notetypes(cands):
@@ -1433,13 +1471,13 @@ class CardReverser:
             return 0
         print("\n=== Resumo: o que vai ser invertido ===")
         for nt, pairs in plan:
-            print(f" {nt['name']} ({self.counts[nt['id']]} notas, "
+            print(f" {nt['name']} ({self.rev.counts[nt['id']]} notas, "
                   f"{len(nt['tmpls'])} modelo(s) de cartão):")
             for a, b in pairs:
                 print(f"   {a}  <->  {b}")
         if not Ui.yes("\nQuer inverter esses cartões?", "s"):
             return 0
-        return self.apply(plan)
+        return self.rev.apply(plan)
 
 class ReverseApp:
     """Comando reverse: importar -> inverter cartões -> exportar. Não usa serviço de tradução."""
@@ -1459,7 +1497,8 @@ class ReverseApp:
         anki = AnkiCollection(src, self.opts.keep_scheduling, self.opts.legacy, rep)
         try:
             anki.import_package()
-            if not CardReverser(anki, self.opts, rep).run():
+            if not ReverseCli(CardReverser(anki, rep),
+                             ReverseConfig(self.opts.notetype, self.opts.swap)).run():
                 raise AnkiToolError("Nada foi invertido; nenhum arquivo gerado.")
             anki.export(out)
             print("pronto ->", out)

@@ -41,6 +41,7 @@ class FakeProvider(TranslationProvider):
         words = set(re.findall(r"\w+", TextTools.plain(text).lower()))
         score = {lang: len(words & stop) for lang, stop in self.STOP.items()}
         best = max(score, key=score.get)
+        # No stopword matched (e.g. numbers/unknown text): default to English.
         return best if score[best] else "EN"
 
     def usage(self):

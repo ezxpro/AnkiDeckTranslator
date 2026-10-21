@@ -1,0 +1,7 @@
+SAMPLE, MIN_RATIO = 10, 0.6
+
+DEFAULT_PROVIDER = "deepl"
+
+SEP = "::"
+
+VERSION = "1.1.0"

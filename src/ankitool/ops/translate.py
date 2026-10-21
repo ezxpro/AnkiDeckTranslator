@@ -59,6 +59,8 @@ class FieldLanguageDetector:
                 sent += len(fresh)
             reused += len(pick)
             sample = pick + fresh
+            if not sample:                                # empty field (all text filtered out)
+                continue
             lang, cnt = collections.Counter(lang_cache[h(p)] for p in sample).most_common(1)[0]
             ex = re.sub(r"\s+", " ", sample[0])[:45]
             detected[key] = (lang, cnt / len(sample), ex)

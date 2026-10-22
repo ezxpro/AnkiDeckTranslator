@@ -33,8 +33,10 @@ class AnkiCollection:
                     with_deck_configs=self.keep_scheduling)))
             
     def load_notes(self):
-        for nid in track(self.rep, self.col.find_notes(""), "loading notes"):
-            n = self.col.get_note(nid)
+        nids = self.col.find_notes("")
+        get_notes = getattr(self.col, "get_notes", None)      # batch read in newer anki versions
+        notes = get_notes(nids) if get_notes else [self.col.get_note(i) for i in nids]
+        for n in track(self.rep, notes, "loading notes"):
             self.notes.append(n)
             if n.mid not in self.model_names:
                 self.model_names[n.mid] = n.note_type()["name"]
@@ -59,17 +61,21 @@ class AnkiCollection:
         return unmatched
 
     def apply_translations(self, chosen, cache):
+        changed = []
         for n in track(self.rep, self.notes, "applying translations"):
-            changed = False
+            dirty = False
             for f, v in n.items():
                 c = chosen.get((n.mid, f))
                 if c:
                     new = cache.get(c[1], c[0], v)
                     if new is not None and new != v:
                         n[f] = new
-                        changed = True
-            if changed:
-                self.col.update_note(n)
+                        dirty = True
+            if dirty:
+                changed.append(n)
+        for i in range(0, len(changed), 500):                 # one backend call per chunk, not per note
+            self.col.update_notes(changed[i:i + 500])
+        self.rep.log(f"notes updated: {len(changed)}")
 
     def deck_list(self):
         return [(d.id, d.name) for d in self.col.decks.all_names_and_ids(

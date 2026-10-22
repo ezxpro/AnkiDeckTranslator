@@ -33,7 +33,7 @@ def load_secret(env_name, label):
                     continue
                 name, value = line.split("=", 1)
                 if name.removeprefix("export ").strip() == env_name:
-                    key = value.strip().strip('"').strip("'")
+                    key = value.split("#", 1)[0].strip().strip('"').strip("'")
                     break
     if not key:
         raise ConfigError(f"API key for {label} not found. Set the environment variable "

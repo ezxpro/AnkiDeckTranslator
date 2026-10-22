@@ -11,7 +11,7 @@ from pathlib import Path
 from ankitool.core.paths import SCRIPT_DIR
 
 CONFIG_FILE = SCRIPT_DIR / "config.json"
-PROVIDER_KEYS = {"model": str, "base_url": str, "max_workers": int}     # per-provider options
+PROVIDER_KEYS = {"model": str, "base_url": str, "max_workers": int, "cache": str}   # per-provider options
 
 
 class Settings:

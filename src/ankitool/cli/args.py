@@ -3,6 +3,7 @@ import argparse
 import re
 import sys
 
+from ankitool.cache.translation import MODES
 from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
 from ankitool.core.errors import ConfigError
 from ankitool.core.settings import configured_provider
@@ -135,6 +136,10 @@ def parse_args(argv=None):
     t.add_argument("--deck-name", action="append", metavar="CURRENT=NEW",
                    help="renames the deck named CURRENT (one level, no '::') to NEW; "
                         "can be repeated. Without -d/-m, only these are renamed")
+    t.add_argument("--cache-mode", choices=list(MODES), metavar="MODE",
+                   help="which saved translations are reused: shared = any service's (this service's "
+                        "first, then another's); isolated = only this service's. Default: the one set "
+                        "in config.json (providers.SERVICE.cache), or shared"),
     t.add_argument("--dry-run", action="store_true",
                    help="only calculates how many texts and characters would be translated; "
                         "does not translate or create a file (language detection still uses some characters)")
@@ -200,7 +205,7 @@ def parse_args(argv=None):
     c.add_argument("action", nargs="?", choices=["show", "set", "unset"], default="show",
                    help="what to do: show (default), set, or unset a preference")
     c.add_argument("key", nargs="?", metavar="KEY",
-                   help="provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+                   help="provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
     c.add_argument("value", nargs="?", metavar="VALUE", help="new value (for 'set')")
 
     opts = p.parse_args(argv)
@@ -235,7 +240,7 @@ def parse_args(argv=None):
     elif opts.command == "config":
         if opts.action in ("set", "unset") and not opts.key:
             c.error(f"'config {opts.action}' needs a KEY: provider, or "
-                    f"SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+                    f"SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
         if opts.action == "set" and opts.value is None:
             c.error(f"'config set {opts.key}' needs a VALUE")
         if opts.action == "show" and opts.key:

@@ -18,8 +18,8 @@ class DeckRenamer:
     Top-level decks are the first-level ones; sub-decks are the ones inside another deck (separated
     by '::'). Without questions: the menus are in DeckRenameCli."""
 
-    def __init__(self, anki, client, target, cache, rep=None):
-        self.anki, self.client, self.cache = anki, client, cache
+    def __init__(self, anki, client, target, view, rep=None):
+        self.anki, self.client, self.view = anki, client, view      # view: CacheView
         self.target, self.tbase = target, lang_base(target)
         self.rep = rep or Reporter()
 
@@ -43,8 +43,9 @@ class DeckRenamer:
         return s or fallback
 
     def auto_names(self, segments, src_lang):
-        bucket = self.cache.bucket(self.target, src_lang)
-        pending = sorted(s for s in segments if s not in bucket)
+        found = {s: self.view.read_deck(self.target, src_lang, s) for s in segments}
+        pending = sorted(s for s, v in found.items() if v is None)
+        result = {s: v for s, v in found.items() if v is not None}
         self.rep.log(f"deck names: {len(pending)} to translate "
                      f"({len(segments) - len(pending)} already cached)")
         step = self.client.batch_size
@@ -57,9 +58,10 @@ class DeckRenamer:
                 break
             for s, r in zip(chunk, res):
                 already = lang_base(r.detected_source_lang) == self.tbase  # already in the output language
-                bucket[s] = s if already else self.clean_seg(r.text or "", s)
-            self.cache.save()
-        return {s: bucket.get(s, s) for s in segments}
+                result[s] = s if already else self.clean_seg(r.text or "", s)
+                self.view.write_deck(self.target, src_lang, s, result[s])
+            self.view.save()
+        return {s: result.get(s, s) for s in segments}
 
     def auto_newseg(self, selected, overrides, src_lang, translate=True):
         """{path: new last segment}. 'overrides' (--deck-name) always wins;

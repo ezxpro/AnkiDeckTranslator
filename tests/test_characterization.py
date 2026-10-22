@@ -1,6 +1,5 @@
 import json
 
-from ankitool.cache.translation import TranslationCache
 from ankitool.cli.console import Ui
 from ankitool.core.text import TextTools, lang_base
 from ankitool.ops.rename import DeckRenamer
@@ -54,10 +53,3 @@ def test_suggest_pairs_by_name():
     nt = {"flds": [{"name": n} for n in names], "tmpls": [{"qfmt": "", "afmt": ""}]}
     assert CardReverser.suggest_pairs(nt) == [
         ("Word", "TranslationWord"), ("WordAudio", "TranslationWordAudio")]
-
-
-def test_cache_v2_migration(tmp_path):
-    p = tmp_path / "c.json"
-    p.write_text(json.dumps({"version": 2, "trans": {"PT-BR": {"ciao": "olá"}}}))
-    c = TranslationCache(p, {"PT-BR"})
-    assert c.get("PT-BR", "IT", "ciao") == "olá"

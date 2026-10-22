@@ -1,80 +1,124 @@
+"""One translation cache for every service: cache.json (version 4).
+
+  trans: {TARGET: {SOURCE: {hash(text): {SERVICE: translation}}}}
+  lang:  {hash(plain text): detected language}           shared by all services
+  decks: {TARGET: {SOURCE: {deck name: {SERVICE: name}}}}
+
+Only hashes of the texts are stored for translations (the deck text is not written).
+Each service writes only its own entry, so services never overwrite each other.
+
+Modes (per service, see CacheView):
+  shared   (default): the service's own translation if it has one; otherwise a translation
+                      stored by another service (the first service in alphabetical order,
+                      so the result is always the same).
+  isolated: only the service's own translation; others are ignored.
+The default mode is 'shared'; a service can have its own mode in config.json (providers.NAME.cache)."""
 import json
+from pathlib import Path
 
 from ankitool.core.progress import Reporter
 from ankitool.core.text import h
 
+MODES = ("shared", "isolated")
+DEFAULT_MODE = "shared"
+VERSION = 4
+
+
+def _pick(entry, service, mode):
+    if not entry:
+        return None
+    if service in entry:
+        return entry[service]
+    if mode == "isolated":
+        return None
+    return entry[min(entry)]                       # shared: deterministic choice among the others
+
 
 class TranslationCache:
-    """cache.json (v3)
-    trans: {OUTPUT: {SOURCE: {hash(text): translation}}}   ("?" = unknown source, from v2)
-    lang:  {hash(plain text): detected language}
-    Only hashes go to the file: the original deck text is not stored."""
-
-    VERSION = 3
-
-    def __init__(self, path, valid_target_codes, rep=None):
-        self.path = path
-        self.valid_target_codes = valid_target_codes
-        self.rep = rep or Reporter()                     # before _load(), which uses self.rep
-        data = self._load()
-        self.trans = data["trans"]
-        self.lang = data["lang"]
+    def __init__(self, path, rep=None):
+        self.path = Path(path)
+        self.rep = rep or Reporter()
+        self.trans, self.lang, self.decks = {}, {}, {}
+        self._load()
 
     def _load(self):
-        data = {}
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                bak = self.path.with_name(self.path.name + ".bak")
-                # Rotate so a second corruption does not overwrite the previous backup.
-                i = 1
-                while bak.exists():
-                    bak = self.path.with_name(f"{self.path.name}.bak{i}")
-                    i += 1
-                self.path.replace(bak)
-                self.rep.log(f"cache.json was unreadable; saved a copy as {bak.name} and started a new one")
-                data = {}
-        if not isinstance(data, dict):
-            data = {}
-        ver = data.get("version")
-        if data and ver not in (2, 3):          # old format: keys "OUTPUT|SOURCE|text"
-            old, data, migrated = data, {}, 0
-            data["trans"] = {}
-            for k, v in old.items():
-                parts = k.split("|", 2)
-                if len(parts) == 3 and parts[0] in self.valid_target_codes:
-                    data["trans"].setdefault(parts[0], {})[parts[2]] = v
-                    migrated += 1
-            data["lang"] = old.get("lang", {}) if isinstance(old.get("lang"), dict) else {}
-            self.rep.log(f"old cache converted: {migrated} translations kept")
-            ver = 2
-        if ver == 2:                            # v2: original text as key, unknown source
-            trans, migrated = {}, 0
-            for t_code, d in data.get("trans", {}).items():
-                trans[t_code] = {"?": {h(t): out for t, out in d.items()}}
-                migrated += len(d)
-            data = {"trans": trans}
-            self.rep.log(f"v2 cache converted to hashes: {migrated} translations kept "
-                         f"(unknown source, stored under '?')")
-        return {"trans": data.get("trans", {}), "lang": data.get("lang", {})}
+        if not self.path.exists():
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if not isinstance(data, dict) or data.get("version") != VERSION:
+            bak = self.path.with_name(self.path.name + ".bak")     # never overwrite an old copy
+            i = 1
+            while bak.exists():
+                bak = self.path.with_name(f"{self.path.name}.bak{i}")
+                i += 1
+            self.path.replace(bak)
+            self.rep.log(f"{self.path.name} was not a version {VERSION} cache; saved it as {bak.name}")
+            return
+        self.trans = data.get("trans", {})
+        self.lang = data.get("lang", {})
+        self.decks = data.get("decks", {})
 
     def save(self):
-        tmp = self.path.with_name(self.path.name + ".tmp")     # write to a temp file and swap:
-        payload = {"version": self.VERSION, "trans": self.trans, "lang": self.lang}
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                       encoding="utf-8")
-        tmp.replace(self.path)                                 # closing the program can't corrupt it
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + ".tmp")     # write a temp file and swap it in
+        payload = {"version": VERSION, "trans": self.trans, "lang": self.lang, "decks": self.decks}
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(self.path)
 
-    def get(self, T, L, v):
-        """Cached translation of v (output T, source L), or None. The '?' bucket (old cache)
-        is only checked if the exact bucket doesn't have the text; nothing new is written to it."""
-        tt, k = self.trans.get(T, {}), h(v)
-        r = tt.get(L, {}).get(k)
-        return r if r is not None else tt.get("?", {}).get(k)
+    def get(self, T, L, text, service, mode=DEFAULT_MODE):
+        return _pick(self.trans.get(T, {}).get(L, {}).get(h(text)), service, mode)
 
-    def put(self, T, L, src, out):
-        self.trans.setdefault(T, {}).setdefault(L, {})[h(src)] = out
+    def put(self, T, L, src, out, service):
+        self.trans.setdefault(T, {}).setdefault(L, {}).setdefault(h(src), {})[service] = out
+
+    def deck_get(self, T, L, seg, service, mode=DEFAULT_MODE):
+        return _pick(self.decks.get(T, {}).get(L or "auto", {}).get(seg), service, mode)
+
+    def deck_put(self, T, L, seg, out, service):
+        self.decks.setdefault(T, {}).setdefault(L or "auto", {}).setdefault(seg, {})[service] = out
 
     def count(self):
-        return sum(len(d) for t in self.trans.values() for d in t.values())
+        return sum(len(e) for by_src in self.trans.values() for by_h in by_src.values() for e in by_h.values())
+
+    def stats(self):
+        """{service: {target: number of translations}}"""
+        out = {}
+        for T, by_src in self.trans.items():
+            for by_h in by_src.values():
+                for entry in by_h.values():
+                    for s in entry:
+                        out.setdefault(s, {})[T] = out.get(s, {}).get(T, 0) + 1
+        return out
+
+
+class CacheView:
+    """What one service may read and write: its name and its mode."""
+
+    def __init__(self, cache, service, mode=DEFAULT_MODE):
+        if mode not in MODES:
+            raise ValueError(f"unknown cache mode: {mode}")
+        self.cache, self.service, self.mode = cache, service, mode
+
+    @property
+    def lang(self):
+        return self.cache.lang
+
+    def read(self, T, L, text):
+        return self.cache.get(T, L, text, self.service, self.mode)
+
+    get = read                                     # used by AnkiCollection.apply_translations
+
+    def write(self, T, L, src, out):
+        self.cache.put(T, L, src, out, self.service)
+
+    def read_deck(self, T, L, seg):
+        return self.cache.deck_get(T, L, seg, self.service, self.mode)
+
+    def write_deck(self, T, L, seg, out):
+        self.cache.deck_put(T, L, seg, out, self.service)
+
+    def save(self):
+        self.cache.save()

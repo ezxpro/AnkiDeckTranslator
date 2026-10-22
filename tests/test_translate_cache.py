@@ -1,4 +1,4 @@
-from ankitool.cache.translation import TranslationCache
+from ankitool.cache.translation import CacheView, TranslationCache
 from ankitool.core.text import TextTools
 from ankitool.core.progress import Reporter
 from ankitool.ops.translate import FieldTranslator
@@ -7,6 +7,7 @@ from ankitool.providers.base import TranslationResult
 
 class StubClient:
     """Mimics the provider contract: masks the tags, translates, and unmasks the result."""
+    name = "stub"
     label = "stub"
     batch_size = 40
     max_workers = 1
@@ -26,8 +27,8 @@ KEY = ((1, "Front"), ("IT", "PT-BR"))
 
 
 def _run(tmp_path, reply):
-    cache = TranslationCache(tmp_path / "c.json", {"PT-BR"})
-    FieldTranslator(StubClient(reply), cache, Reporter()).translate(
+    cache = TranslationCache(tmp_path / "cache.json")
+    FieldTranslator(StubClient(reply), CacheView(cache, "stub"), Reporter()).translate(
         {KEY[0]: KEY[1]}, {KEY[0]: [SRC]})
     return cache
 
@@ -35,9 +36,9 @@ def _run(tmp_path, reply):
 def test_damaged_tags_are_not_cached(tmp_path):
     # reply that drops the [sound:...] must not be stored as a translation
     cache = _run(tmp_path, lambda t: "olá")
-    assert cache.get("PT-BR", "IT", SRC) is None
+    assert cache.get("PT-BR", "IT", SRC, "stub") is None
 
 
 def test_intact_tags_are_cached(tmp_path):
     cache = _run(tmp_path, lambda t: t.replace("ciao", "olá"))
-    assert cache.get("PT-BR", "IT", SRC) == "olá [sound:a.mp3]"
+    assert cache.get("PT-BR", "IT", SRC, "stub") == "olá [sound:a.mp3]"

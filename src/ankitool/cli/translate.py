@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from ankitool.cache.deckname import DeckNameCache
-from ankitool.cache.translation import TranslationCache
+from ankitool.cache.translation import CacheView, DEFAULT_MODE, MODES, TranslationCache
+from ankitool.core.settings import provider_option
 from ankitool.cli.console import ConsoleReporter, Ui, ask_input, ask_paths, choose_provider
 from ankitool.cli.rename import DeckRenameCli
 from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError
@@ -24,11 +24,13 @@ class AnkiToolApp:
         usage = self.client.usage()
         if usage is not None:
             self.rep.log(f"current usage {self.client.label}:", usage)
-        self.cache = TranslationCache(self.client.cache_file("cache", self.cache_dir),
-                                      self.client.target_codes, self.rep)
-        self.deck_cache = DeckNameCache(self.client.cache_file("deck_cache", self.cache_dir), self.rep)
-        self.rep.log(f"cache: {self.cache.count()} translations and {len(self.cache.lang)} "
-                     f"text languages stored in {self.cache.path}")
+        # mode: --cache-mode > providers.NAME.cache in config.json > shared
+        self.mode = opts.cache_mode or provider_option(self.client.name, "cache") or DEFAULT_MODE
+        if self.mode not in MODES:
+            raise ConfigError(f"invalid cache mode '{self.mode}' for {self.client.name}. Use: {', '.join(MODES)}")
+        self.cache = TranslationCache(self.cache_dir / "cache.json", self.rep)
+        self.rep.log(f"cache (cache.json): {self.cache.count()} translations, "
+                     f"{len(self.cache.lang)} text languages; mode: {self.mode} for {self.client.name}")
         self.target = None
 
     # ---- questions ----
@@ -111,7 +113,7 @@ class AnkiToolApp:
         cfg = TranslateConfig(
             target=self.target, sample=opts.sample, min_ratio=opts.min_ratio,
             only_fields=opts.only_fields or [], skip_fields=opts.skip_fields or [],
-            keep_scheduling=opts.keep_scheduling, legacy=opts.legacy)
+            keep_scheduling=opts.keep_scheduling, legacy=opts.legacy, cache_mode=self.mode)
         op = TranslateOperation(self.client, self.cache, cfg, self.rep)
         try:
             op.open(src)
@@ -134,7 +136,8 @@ class AnkiToolApp:
             op.apply(chosen)
 
             src_lang = next(iter(picked)) if len(picked) == 1 else None
-            renamer = DeckRenamer(op.anki, self.client, self.target, self.deck_cache, self.rep)
+            view = CacheView(self.cache, self.client.name, self.mode)
+            renamer = DeckRenamer(op.anki, self.client, self.target, view, self.rep)
             DeckRenameCli(renamer, RenameConfig(opts.rename_decks, opts.deck_method,
                                                 opts.deck_names)).run(src_lang)
 

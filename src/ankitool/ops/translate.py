@@ -6,6 +6,7 @@ import random
 import re
 
 from ankitool.anki.collection import AnkiCollection
+from ankitool.cache.translation import CacheView, DEFAULT_MODE
 from ankitool.core.constants import MIN_RATIO, SAMPLE
 from ankitool.core.errors import ConfigError, ProviderUnavailable
 from ankitool.core.progress import Reporter
@@ -22,6 +23,7 @@ class TranslateConfig:
     skip_fields: list = field(default_factory=list)
     keep_scheduling: bool = False
     legacy: bool = True
+    cache_mode: str = DEFAULT_MODE                       # shared | isolated
 
 @dataclass
 class Estimate:
@@ -86,20 +88,22 @@ class FieldLanguageDetector:
 
     
 class FieldTranslator:
-    """Translates the chosen fields (cache per output + source + text hash)."""
+    """Translates the chosen fields, reusing and saving translations through a CacheView."""
 
-    def __init__(self, client, cache, rep):
-        self.client, self.cache, self.rep = client, cache, rep
+    def __init__(self, client, view, rep):
+        self.client, self.view, self.rep = client, view, rep
         client.on_wait = rep.waiting
-        
+
     def translate(self, chosen, field_values, dry_run=False):
         todo = collections.defaultdict(list)             # (source, output) -> texts
         queued, cached = set(), set()
         for (mid, f), (L, T) in chosen.items():
             for v in field_values[(mid, f)]:
-                if self.cache.get(T, L, v) is not None:
+                if (L, T, v) in cached or (L, T, v) in queued:
+                    continue
+                if self.view.read(T, L, v) is not None:
                     cached.add((L, T, v))
-                elif (L, T, v) not in queued:
+                else:
                     queued.add((L, T, v))
                     todo[(L, T)].append(v)
         chars = sum(len(self.client.mask(v)) for (_, _, v) in queued)
@@ -127,19 +131,19 @@ class FieldTranslator:
                     for src, r in zip(chunk, res):
                         out = r.text
                         if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
-                            self.cache.put(T, L, src, out)
+                            self.view.write(T, L, src, out)
                         else:
                             self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
                     done += len(chunk)
                     if time.monotonic() - last_save >= 5:   # throttled: rewriting the file each chunk is O(n²)
-                        self.cache.save()
+                        self.view.save()
                         last_save = time.monotonic()
                     self.rep.log(f" [{L}->{T}] {done}/{len(texts)}")
             finally:
                 pool.shutdown(wait=True, cancel_futures=True)
-                self.cache.save()                       # keep everything translated so far, even on error/cancel
+                self.view.save()                        # keep everything translated so far, even on error/cancel
         return est
-    
+
 class TranslateOperation:
     """Translation flow for one deck, with no questions and no print/input:
     open -> detect -> plan -> translate -> apply -> export -> close."""
@@ -148,6 +152,7 @@ class TranslateOperation:
         self.client, self.cache, self.cfg = client, cache, cfg
         self.rep = rep or Reporter()
         self.target, self.tbase = cfg.target, lang_base(cfg.target)
+        self.view = CacheView(cache, client.name, cfg.cache_mode)
         self.anki = None
 
     def open(self, src):
@@ -196,11 +201,11 @@ class TranslateOperation:
                 if lang in picked and ratio >= self.cfg.min_ratio}
 
     def translate(self, chosen, dry_run=False):
-        return FieldTranslator(self.client, self.cache, self.rep).translate(
+        return FieldTranslator(self.client, self.view, self.rep).translate(
             chosen, self.anki.field_values, dry_run=dry_run)
 
     def apply(self, chosen):
-        self.anki.apply_translations(chosen, self.cache)
+        self.anki.apply_translations(chosen, self.view)
 
     def export(self, out):
         self.anki.export(out)

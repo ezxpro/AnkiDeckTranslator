@@ -187,6 +187,7 @@ ankitool translate deck.apkg [options]
 | `--field FIELD` / `--skip-field FIELD` | Translate only / not a field (or `NOTETYPE:FIELD`) |
 | `--sample N` | Texts per field sampled for detection (default 10) |
 | `--min-ratio R` | Min agreement fraction (0–1) to trust detection (default 0.6) |
+| `--cache-mode shared\|isolated` | Which saved translations are reused (see [Caching](#caching)); default: the service's setting, or `shared` |
 | `--cache-dir FOLDER` | Folder for cache files (default: script folder) |
 | `-o, --output OUT` | Output file |
 | `-f, --force` | Overwrite an existing output file |
@@ -263,10 +264,38 @@ translation) so they aren't mangled.
 
 ## Caching
 
-Translated texts are stored in `cache.json` (or `cache_<service>.json`), and deck-name
-translations in `deck_cache.json`. Re-running a translation reuses these, so identical text is
-never sent to (or billed by) the service twice. Use `--cache-dir FOLDER` to relocate them; the
-cache files are safe to delete if you want a clean start.
+All translations are saved in **one file, `cache.json`**, shared by every service. Each service
+stores its own translations under its name, so services never overwrite each other. Deck names and
+detected languages are saved there too. Re-running a deck costs nothing for texts already stored.
+
+```
+trans: { target: { source language: { hash of the text: { service: translation } } } }
+lang:  { hash of the text: detected language }        shared by all services
+decks: { target: { source language: { deck name: { service: name } } } }
+```
+
+Only hashes of the texts are stored for translations. The file is safe to delete for a clean start.
+Use `--cache-dir FOLDER` to put it somewhere else.
+
+### Modes
+
+| Mode | Reads | Writes |
+| ---- | ----- | ------ |
+| `shared` (default) | the service's own translation; if it has none, a translation stored by another service (alphabetical order, so the choice is always the same) | its own entry |
+| `isolated` | only the service's own translation | its own entry |
+
+Each service can have its own mode, saved in `config.json`:
+
+```
+ankitool config set deepl.cache isolated
+ankitool config set gemini.cache shared
+```
+
+For a single run, use `--cache-mode shared|isolated`. The order is: flag, then the service's
+setting, then `shared`.
+
+A translation reused from another service is not copied under the current service's name, so its
+origin stays in the file.
 
 ## Project layout
 
@@ -274,7 +303,7 @@ cache files are safe to delete if you want a clean start.
 src/ankitool/
   core/        errors, constants, paths, progress (Reporter, CancelToken), text helpers   (no I/O to the user)
   providers/   base.py (contract + registry), deepl.py, gemini.py, openai_compat.py, fake.py
-  cache/       translation cache, deck-name cache
+  cache/       translation.py: the one cache.json for all services, its modes and views
   anki/        collection.py: the only module that imports the `anki` package
   ops/         translate / rename / reverse / bench: config dataclasses + operations, no print/input
   cli/         console (Ui, ConsoleReporter, file picker), per-command apps, args, main

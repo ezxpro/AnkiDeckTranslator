@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
 import time
 from ankitool.core.settings import env_value
 
@@ -51,7 +50,7 @@ class TranslationProvider(ABC):
          (and, if available, usage and detect);
       3. decorate the class with @register_provider.
     It then works with --provider and in the interactive menu, with its own cache
-    (cache_<name>.json). If the service does not understand HTML with translate="no",
+    in the shared cache.json, under its name. If the service does not understand HTML with translate="no",
     override mask/unmask to protect [sound:...] and {{c1::...}} in another way."""
 
     name = ""                                  # identifier used in --provider
@@ -62,7 +61,6 @@ class TranslationProvider(ABC):
     retries = 3
     max_workers = 1                            # parallel calls; raise per provider if its limits allow
     transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
-    cache_tag = None                           # None -> "_<name>" in cache file names
     hidden = False                             # True: only available with --provider, not in the menu
     on_wait = None                             # optional callback(seconds, reason) before a retry sleep
 
@@ -140,7 +138,3 @@ class TranslationProvider(ABC):
     def resolve_target(self, raw):
         """Typed text -> valid output code (in the service's spelling), or None."""
         return self._target_by_norm.get((raw or "").strip().upper())
-
-    def cache_file(self, stem, cache_dir):
-        tag = f"_{self.name}" if self.cache_tag is None else self.cache_tag
-        return Path(cache_dir) / f"{stem}{tag}.json"

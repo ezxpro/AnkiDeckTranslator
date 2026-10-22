@@ -1,6 +1,7 @@
 import json
 
 from ankitool.core.errors import ConfigError
+from ankitool.cache.translation import MODES
 from ankitool.core.settings import PROVIDER_KEYS, get_settings
 from ankitool.providers.base import PROVIDERS
 
@@ -14,7 +15,7 @@ class ConfigApp:
     @staticmethod
     def _keys(key):
         if not key:
-            raise ConfigError("Give a KEY: provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+            raise ConfigError("Give a KEY: provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
         if key == "provider":
             return ("provider",)
         name, _, opt = key.partition(".")
@@ -29,6 +30,9 @@ class ConfigApp:
             if value not in PROVIDERS:
                 raise ConfigError(f"Unknown service '{value}'. Available: {', '.join(sorted(PROVIDERS))}")
             return value
+        if keys[2] == "cache" and value not in MODES:
+            raise ConfigError(f"cache must be one of: {', '.join(MODES)} (shared = reuse any service's "
+                              f"translation; isolated = only this service's)")
         if PROVIDER_KEYS[keys[2]] is int:
             if not value.isdigit() or int(value) < 1:
                 raise ConfigError(f"{keys[2]} must be an integer greater than zero")
@@ -41,7 +45,7 @@ class ConfigApp:
             print("Saved preferences (non-secret settings).")
             print("API keys live in .env, not here — see '.env.example'.")
             print("Command:  ankitool config show | set <KEY> <VALUE> | unset <KEY>")
-            print("  Keys:   provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+            print("  Keys:   provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
             print("  Example: ankitool config set provider groq")
             print("           ankitool config set groq.max_workers 3")
             print()

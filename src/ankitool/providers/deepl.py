@@ -4,7 +4,6 @@ from ankitool.providers.base import Language, TranslationProvider, TranslationRe
 @register_provider
 class DeepLProvider(TranslationProvider):
     name, label, key_env = "deepl", "DeepL", "DEEPL_KEY"
-    cache_tag = ""                             # keeps the cache.json / deck_cache.json file names
 
     def connect(self, key):
         import deepl                           # imported here: only DeepL users need it

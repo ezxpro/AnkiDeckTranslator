@@ -1,5 +1,5 @@
-import os
 import time                                    # noqa: F401  (tests patch gemini.time.sleep)
+import re
 
 from ankitool.core.errors import ConfigError
 from ankitool.core.settings import env_value, provider_option
@@ -21,7 +21,7 @@ class GeminiProvider(LLMProvider):
     """
 
     name, label, key_env = "gemini", "Google Gemini", "GEMINI_KEY"
-    max_workers = 3
+    max_workers = 1
 
     def __init__(self, key=None):
         self.model = (env_value("GEMINI_MODEL") or provider_option("gemini", "model")
@@ -47,6 +47,10 @@ class GeminiProvider(LLMProvider):
                     response_mime_type="application/json"))
         except errors.APIError as e:
             if e.code == 429:
+                msg = str(e.message or "")
+                if re.search(r"per[ _-]?day", msg, re.I):
+                    raise ConfigError("Gemini daily quota reached. Try again tomorrow, or use another "
+                                      "provider (e.g. --provider groq). The cache keeps your progress.") from e
                 raise _Retryable("Gemini rate limit reached (HTTP 429)", self.rate_limit_wait) from e
             if e.code in (500, 502, 503, 504):
                 raise _Retryable(f"Gemini server error (HTTP {e.code})") from e

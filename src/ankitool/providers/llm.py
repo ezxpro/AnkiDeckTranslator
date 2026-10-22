@@ -116,19 +116,21 @@ class LLMProvider(TranslationProvider):
 
     def _batch(self, system, texts, with_text):
         """-> list of (translated_text_or_None, detected_lang) in the order of `texts`.
-        If the reply is malformed the batch is split in halves; a single text that still fails
-        is retried by the caller's retry loop."""
-        payload = json.dumps([{"id": i, "text": t} for i, t in enumerate(texts)],
-                             ensure_ascii=False)
-        try:
-            return self._parse(self._generate(system, payload), len(texts), with_text)
-        except _BadReply as e:
-            if len(texts) == 1:
-                raise _Retryable(str(e)) from e
-            mid = len(texts) // 2
-            return (self._batch(system, texts[:mid], with_text)
-                    + self._batch(system, texts[mid:], with_text))
-
+        A malformed reply is retried once as the same batch; only then is the batch split in halves
+        (each split multiplies the requests). A single text that still fails goes to the retry loop."""
+        payload = json.dumps([{"id": i, "text": t} for i, t in enumerate(texts)], ensure_ascii=False)
+        last = None
+        for _ in range(2):
+            try:
+                return self._parse(self._generate(system, payload), len(texts), with_text)
+            except _BadReply as e:
+                last = e
+        if len(texts) == 1:
+            raise _Retryable(str(last)) from last
+        mid = len(texts) // 2
+        return (self._batch(system, texts[:mid], with_text)
+                + self._batch(system, texts[mid:], with_text))
+    
     def _translate(self, texts, target_lang, source_lang, html):
         source = (f" The source language is {self._language_name(source_lang)}."
                   if source_lang else "")

@@ -1,3 +1,5 @@
+import time
+
 from dataclasses import dataclass, field
 import collections
 import random
@@ -40,28 +42,36 @@ class FieldLanguageDetector:
 
     def detect(self, field_values):
         lang_cache = self.cache.lang
-        detected = {}                                    # (mid, field) -> (language, ratio, example)
-        sent = reused = 0
-        for key, vs in field_values.items():
+        plan, to_send, seen = {}, [], set()
+        for key, vs in field_values.items():           # 1) plan every field first
             self.rep.check_cancelled()
             uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs))
             known = [p for p in uniq if h(p) in lang_cache]
             unknown = [p for p in uniq if h(p) not in lang_cache]
             pick = random.sample(known, min(self.sample, len(known)))
             fresh = random.sample(unknown, min(max(self.sample - len(pick), 0), len(unknown)))
-            if fresh:
-                if sent == 0:
-                    self.rep.log(f"detecting field languages (sample of up to {self.sample} texts each)...")
-                langs = self.client.detect(fresh, self.target)
-                if langs is None:
-                    raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
-                                              f"(the cache keeps your progress).")
-                for p, lang in zip(fresh, langs):
-                    lang_cache[h(p)] = lang
-                sent += len(fresh)
-            reused += len(pick)
+            plan[key] = (pick, fresh)
+            for p in fresh:
+                if p not in seen:
+                    seen.add(p)
+                    to_send.append(p)
+        sent, reused = 0, sum(len(pick) for pick, _ in plan.values())
+        if to_send:
+            self.rep.log(f"detecting languages of {len(to_send)} new texts...")
+        for i in range(0, len(to_send), self.client.batch_size):   # 2) one batch across all fields
+            self.rep.check_cancelled()
+            chunk = to_send[i:i + self.client.batch_size]
+            langs = self.client.detect(chunk, self.target)
+            if langs is None:
+                raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
+                                          f"(the cache keeps your progress).")
+            for p, lang in zip(chunk, langs):
+                lang_cache[h(p)] = lang
+            sent += len(chunk)
+        detected = {}
+        for key, (pick, fresh) in plan.items():         # 3) majority language per field
             sample = pick + fresh
-            if not sample:                                # empty field (all text filtered out)
+            if not sample:                              # empty field (all text filtered out)
                 continue
             lang, cnt = collections.Counter(lang_cache[h(p)] for p in sample).most_common(1)[0]
             ex = re.sub(r"\s+", " ", sample[0])[:45]
@@ -74,13 +84,14 @@ class FieldLanguageDetector:
             self.rep.log("languages already detected (cache): no characters spent on detection")
         return detected
 
+    
 class FieldTranslator:
     """Translates the chosen fields (cache per output + source + text hash)."""
 
     def __init__(self, client, cache, rep):
         self.client, self.cache, self.rep = client, cache, rep
         client.on_wait = rep.waiting
-
+        
     def translate(self, chosen, field_values, dry_run=False):
         todo = collections.defaultdict(list)             # (source, output) -> texts
         queued, cached = set(), set()
@@ -97,6 +108,7 @@ class FieldTranslator:
                      f"already in cache (no cost): {est.cached}")
         if dry_run:
             return est
+        last_save = time.monotonic()
         for (L, T), texts in todo.items():
             texts = sorted(texts)
             step = self.client.batch_size
@@ -118,13 +130,16 @@ class FieldTranslator:
                             self.cache.put(T, L, src, out)
                         else:
                             self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
-                    self.cache.save()
                     done += len(chunk)
+                    if time.monotonic() - last_save >= 5:   # throttled: rewriting the file each chunk is O(n²)
+                        self.cache.save()
+                        last_save = time.monotonic()
                     self.rep.log(f" [{L}->{T}] {done}/{len(texts)}")
             finally:
                 pool.shutdown(wait=True, cancel_futures=True)
+                self.cache.save()                       # keep everything translated so far, even on error/cancel
         return est
-
+    
 class TranslateOperation:
     """Translation flow for one deck, with no questions and no print/input:
     open -> detect -> plan -> translate -> apply -> export -> close."""

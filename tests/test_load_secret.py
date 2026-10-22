@@ -2,7 +2,7 @@
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
-
+import os
 import pytest
 
 from ankitool.core.errors import ConfigError
@@ -16,7 +16,9 @@ def _env_dir(contents):
 
 
 def _load(env_name, contents):
-    with patch("ankitool.providers.base.SCRIPT_DIR", _env_dir(contents)):
+    with patch.dict(os.environ, {}), \
+         patch("ankitool.core.settings.SCRIPT_DIR", _env_dir(contents)):
+        os.environ.pop(env_name, None)
         return load_secret(env_name, "Test")
 
 

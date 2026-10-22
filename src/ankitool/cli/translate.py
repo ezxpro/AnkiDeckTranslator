@@ -10,7 +10,7 @@ from ankitool.ops.rename import DeckRenamer, RenameConfig
 from ankitool.ops.translate import TranslateConfig, TranslateOperation
 
 
-class AnkiTranslatorApp:
+class AnkiToolApp:
     """Coordinates the flow: questions -> import -> detect -> translate -> rename -> export."""
 
     def __init__(self, opts):

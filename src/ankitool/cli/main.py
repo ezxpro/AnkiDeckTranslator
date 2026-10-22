@@ -6,7 +6,7 @@ from ankitool.cli.config import ConfigApp
 from ankitool.cli.console import Ui, choose_provider
 from ankitool.cli.info import InfoApp
 from ankitool.cli.reverse import ReverseApp
-from ankitool.cli.translate import AnkiTranslatorApp
+from ankitool.cli.translate import AnkiToolApp
 from ankitool.core.errors import AnkiToolError
 
 
@@ -66,7 +66,7 @@ def main(argv=None):
                     Ui.show_langs("Available target languages (code and name):",
                                   provider.target_langs)
             elif opts.command != "exit":
-                AnkiTranslatorApp(opts).run()
+                AnkiToolApp(opts).run()
 
             if not from_menu or Ui.auto or not Ui.yes(BACK_TO_MENU, "y"):
                 break

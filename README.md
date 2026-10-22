@@ -32,7 +32,14 @@ and import it in `providers/__init__.py`.
 ```
 ankitool translate deck.apkg --provider deepl     # needs DEEPL_KEY
 ankitool translate deck.apkg --provider gemini    # needs GEMINI_KEY (free tier available)
+ankitool translate deck.apkg --provider groq      # needs GROQ_KEY (free tier available)
+ankitool translate deck.apkg --provider openai    # any OpenAI-compatible API: OPENAI_KEY + OPENAI_BASE_URL
 ```
+
+Keys and overrides go in `.env` (see `.env.example`) or in environment variables. Non-secret
+preferences live in `config.json`, managed with `ankitool config set provider groq`,
+`ankitool config set groq.max_workers 3` and `ankitool config show`. Lookup order: command-line
+flag, environment variable / `.env`, `config.json`, built-in default.
 
 Gemini is a language model, so results can differ slightly between runs. The model defaults to
 `gemini-flash-lite-latest`; set `GEMINI_MODEL` to use another one. Free-tier limits are shown in

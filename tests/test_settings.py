@@ -57,6 +57,15 @@ def test_config_command_set_and_validate():
     assert saved.get("providers", "groq") == {"max_workers": 4, "model": "m2"}
 
 
+def test_env_value_reads_env_then_dotenv():
+    from ankitool.core.settings import env_value
+    f = _tmp().with_name(".env")
+    f.write_text('# c\nexport GROQ_MODEL="m-file"\nANKITOOL_PROVIDER=groq\n', encoding="utf-8")
+    assert env_value("GROQ_MODEL", f) == "m-file" and env_value("NOPE_X", f) == ""
+    with patch.dict("os.environ", {"GROQ_MODEL": "m-env"}):
+        assert env_value("GROQ_MODEL", f) == "m-env"
+
+
 def test_provider_uses_config_but_env_wins():
     st = Settings(_tmp())
     st.set("cfg-model", "providers", "groq", "model"); st.set(7, "providers", "groq", "max_workers")

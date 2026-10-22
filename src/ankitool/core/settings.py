@@ -62,6 +62,20 @@ class Settings:
         os.replace(tmp, self.path)                     # never leaves a half-written file
 
 
+def env_value(name, env_file=None):
+    """Value of `name` from the environment, else from the .env file next to the script ("" if absent)."""
+    value = os.environ.get(name, "").strip()
+    env_file = Path(env_file) if env_file else SCRIPT_DIR / ".env"
+    if not value and env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                if k.removeprefix("export ").strip() == name:
+                    return v.strip().strip('"').strip("'")
+    return value
+
+
 _instance = None
 
 def get_settings():
@@ -74,8 +88,8 @@ def get_settings():
     return _instance
 
 def configured_provider():
-    """Service chosen by the user (ANKITOOL_PROVIDER or config.json), or None."""
-    return os.environ.get("ANKITOOL_PROVIDER", "").strip() or get_settings().get("provider") or None
+    """Service chosen by the user (ANKITOOL_PROVIDER in env/.env, or config.json), or None."""
+    return env_value("ANKITOOL_PROVIDER") or get_settings().get("provider") or None
 
 def provider_option(provider, key):
     """A provider option from config.json (model, base_url, max_workers), or None."""

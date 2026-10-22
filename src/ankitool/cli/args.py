@@ -7,7 +7,7 @@ from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VE
 from ankitool.providers.base import PROVIDERS
 
 
-COMMANDS = ("translate", "reverse", "info", "langs")
+COMMANDS = ("translate", "reverse", "info", "langs", "bench")
 
 def positive_int(s):
     try:
@@ -16,6 +16,15 @@ def positive_int(s):
         v = 0
     if v < 1:
         raise argparse.ArgumentTypeError(f"'{s}' is not an integer greater than zero")
+    return v
+
+def workers_type(s):
+    try:
+        v = sorted({int(x) for x in s.split(",")})
+    except ValueError:
+        v = []
+    if not v or v[0] < 1:
+        raise argparse.ArgumentTypeError(f"'{s}' is not a list of integers greater than zero (e.g. 1,2,4)")
     return v
 
 def ratio_type(s):
@@ -121,6 +130,20 @@ def parse_args(argv=None):
     lg.add_argument("--source", action="store_true",
                     help="list SOURCE languages (the ones the service recognizes) "
                          "instead of the target ones")
+
+    b = sub.add_parser("bench", parents=[common],
+                       help="measures a service's speed and rate limits (makes real API calls)",
+                       description="Calls the service with 1, 2, 4... parallel workers, reports speed "
+                                   "and errors (rate limits) and suggests max_workers. Uses API quota.")
+    b.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
+                   help=f"translation service (default: {DEFAULT_PROVIDER})")
+    b.add_argument("-t", "--target", metavar="CODE", help="target language (default: the service's default)")
+    b.add_argument("--calls", type=positive_int, default=8, metavar="N",
+                   help="API calls per worker count (default: 8)")
+    b.add_argument("--batch", type=positive_int, default=10, metavar="N",
+                   help="texts per call (default: 10)")
+    b.add_argument("--workers", type=workers_type, default=[1, 2, 4, 8], metavar="LIST",
+                   help="worker counts to test, comma-separated (default: 1,2,4,8)")
 
     opts = p.parse_args(argv)
 

@@ -24,6 +24,10 @@ class OpenAICompatProvider(LLMProvider):
         prefix = self.key_env.removesuffix("_KEY")
         self.base_url = (setting(f"{prefix}_BASE_URL") or provider_option(self.name, "base_url")
                          or self.default_base_url).rstrip("/")
+        allow_http = self.base_url.startswith("http://localhost") or self.base_url.startswith("http://127.0.0.1")
+        if not self.base_url.startswith("https://") and not allow_http:
+            raise ConfigError(f"{prefix}_BASE_URL must start with https:// (plain http is only "
+                              f"allowed for localhost, e.g. Ollama): {self.base_url}")
         self.model = setting(f"{prefix}_MODEL") or provider_option(self.name, "model") or self.default_model
         super().__init__(key)
 

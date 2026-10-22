@@ -6,6 +6,7 @@ import time
 
 from ankitool.core.errors import ConfigError
 from ankitool.core.paths import SCRIPT_DIR
+from ankitool.core.settings import get_settings
 from ankitool.core.text import TextTools
 
 
@@ -84,6 +85,9 @@ class TranslationProvider(ABC):
         self.target_codes = {l.code for l in self.target_langs}
         self.source_names = {l.code: l.name for l in self.source_langs}
         self._target_by_norm = {l.code.upper(): l.code for l in self.target_langs}
+        workers = get_settings().get("providers", self.name, "max_workers")   # config.json override
+        if isinstance(workers, int) and not isinstance(workers, bool) and workers > 0:
+            self.max_workers = workers
 
     # ---- to implement in each service ----
     @abstractmethod

@@ -3,6 +3,7 @@ import urllib.error
 import urllib.request
 
 from ankitool.core.errors import ConfigError
+from ankitool.core.settings import provider_option
 from ankitool.providers.base import register_provider
 from ankitool.providers.llm import LLMProvider, _BadReply, _Retryable, setting
 
@@ -21,8 +22,9 @@ class OpenAICompatProvider(LLMProvider):
 
     def __init__(self, key=None):
         prefix = self.key_env.removesuffix("_KEY")
-        self.base_url = (setting(f"{prefix}_BASE_URL") or self.default_base_url).rstrip("/")
-        self.model = setting(f"{prefix}_MODEL") or self.default_model
+        self.base_url = (setting(f"{prefix}_BASE_URL") or provider_option(self.name, "base_url")
+                         or self.default_base_url).rstrip("/")
+        self.model = setting(f"{prefix}_MODEL") or provider_option(self.name, "model") or self.default_model
         super().__init__(key)
 
     def connect(self, key):

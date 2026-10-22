@@ -4,10 +4,11 @@ import re
 import sys
 
 from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
+from ankitool.core.settings import configured_provider
 from ankitool.providers.base import PROVIDERS
 
 
-COMMANDS = ("translate", "reverse", "info", "langs", "bench")
+COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config")
 
 def positive_int(s):
     try:
@@ -77,7 +78,7 @@ def parse_args(argv=None):
                     "With -y: PT-BR, all detected languages, deck names unchanged.")
     t.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
                    help=f"translation service: {', '.join(sorted(PROVIDERS))} "
-                        f"(default: {DEFAULT_PROVIDER})")
+                        f"(default: {configured_provider() or DEFAULT_PROVIDER})")
     t.add_argument("-t", "--target", metavar="CODE",
                    help="target language, e.g. PT-BR, EN-US (see the 'langs' command)")
     t.add_argument("-l", "--lang", metavar="CODES",
@@ -126,7 +127,7 @@ def parse_args(argv=None):
     lg = sub.add_parser("langs", parents=[common],
                         help="list the translation service's languages (target or source)")
     lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
-                    help=f"translation service (default: {DEFAULT_PROVIDER})")
+                    help=f"translation service (default: {configured_provider() or DEFAULT_PROVIDER})")
     lg.add_argument("--source", action="store_true",
                     help="list SOURCE languages (the ones the service recognizes) "
                          "instead of the target ones")
@@ -136,7 +137,7 @@ def parse_args(argv=None):
                        description="Calls the service with 1, 2, 4... parallel workers, reports speed "
                                    "and errors (rate limits) and suggests max_workers. Uses API quota.")
     b.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
-                   help=f"translation service (default: {DEFAULT_PROVIDER})")
+                   help=f"translation service (default: {configured_provider() or DEFAULT_PROVIDER})")
     b.add_argument("-t", "--target", metavar="CODE", help="target language (default: the service's default)")
     b.add_argument("--calls", type=positive_int, default=8, metavar="N",
                    help="API calls per worker count (default: 8)")
@@ -144,6 +145,16 @@ def parse_args(argv=None):
                    help="texts per call (default: 10)")
     b.add_argument("--workers", type=workers_type, default=[1, 2, 4, 8], metavar="LIST",
                    help="worker counts to test, comma-separated (default: 1,2,4,8)")
+
+    c = sub.add_parser("config", parents=[common],
+                       help="show or change the saved preferences (config.json)",
+                       description="Saved preferences, no API keys (those stay in .env). Examples: "
+                                   "config set provider groq | config set groq.max_workers 3 | "
+                                   "config unset provider | config show")
+    c.add_argument("action", choices=["show", "set", "unset"])
+    c.add_argument("key", nargs="?", metavar="KEY",
+                   help="provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+    c.add_argument("value", nargs="?", metavar="VALUE", help="new value (for 'set')")
 
     opts = p.parse_args(argv)
 

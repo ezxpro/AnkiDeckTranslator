@@ -4,6 +4,7 @@ import sys
 import time
 
 from ankitool.core.constants import DEFAULT_PROVIDER
+from ankitool.core.settings import configured_provider
 from ankitool.core.errors import Cancelled, ConfigError
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.progress import Reporter
@@ -279,7 +280,7 @@ def pick_file(start=None, suffix=".apkg"):
 
 def choose_provider(opts):
     """Translation service: --provider, or a question (if there is more than one), or the default."""
-    name = getattr(opts, "provider", None)
+    name = getattr(opts, "provider", None) or configured_provider()   # flag > env/config > ask
     visible = sorted(n for n, c in PROVIDERS.items() if not c.hidden)
     if not name and len(visible) > 1 and not Ui.auto:
         keys = {str(i): n for i, n in enumerate(visible, 1)}

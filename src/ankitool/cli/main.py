@@ -2,6 +2,7 @@ import sys
 
 from ankitool.cli.args import parse_args
 from ankitool.cli.bench import BenchApp
+from ankitool.cli.config import ConfigApp
 from ankitool.cli.console import Ui, choose_provider
 from ankitool.cli.info import InfoApp
 from ankitool.cli.reverse import ReverseApp
@@ -47,6 +48,8 @@ def main(argv=None):
                 InfoApp(opts).run()
             elif opts.command == "bench":
                 BenchApp(opts).run()
+            elif opts.command == "config":
+                ConfigApp(opts).run()
             elif opts.command == "langs":
                 provider = choose_provider(opts)
                 if opts.source:

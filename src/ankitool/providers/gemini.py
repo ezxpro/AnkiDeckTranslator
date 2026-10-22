@@ -2,6 +2,7 @@ import os
 import time                                    # noqa: F401  (tests patch gemini.time.sleep)
 
 from ankitool.core.errors import ConfigError
+from ankitool.core.settings import provider_option
 from ankitool.providers.base import register_provider
 from ankitool.providers.llm import LLMProvider, _BadReply, _Retryable   # noqa: F401  (re-exported)
 
@@ -23,7 +24,8 @@ class GeminiProvider(LLMProvider):
     max_workers = 3
 
     def __init__(self, key=None):
-        self.model = os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
+        self.model = (os.environ.get("GEMINI_MODEL", "").strip() or provider_option("gemini", "model")
+                      or DEFAULT_MODEL)
         super().__init__(key)
 
     def connect(self, key):

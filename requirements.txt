@@ -1,0 +1,10 @@
+# Pip-installable dependencies for ankitool.
+# Everything else the code uses (pathlib, argparse, json, urllib, etc.) is in
+# the Python standard library. This file installs the runtime, all built-in
+# translation providers, and the test tool; for a minimal setup prefer
+# `pip install -e .[deepl,gemini,dev]` with only the extras you need.
+anki            # read and write .apkg decks (required)
+deepl           # --provider deepl
+google-genai    # --provider gemini
+httpx           # imported directly by the Gemini provider
+pytest          # run the test suite

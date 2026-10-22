@@ -13,16 +13,16 @@ from ankitool.core.errors import AnkiToolError
 
 MENU = {"1": ("translate", "Translate a deck",
               "Changes the language of the card text (e.g. from Italian to Portuguese). Uses DeepL."),
-        "2": ("reverse", "Swap the cards (front <-> back)",
+        "2": ("reverse", "Swap front and back of cards",
               "What shows on the front moves to the back, and vice versa. The text does not change."),
-        "3": ("info", "See what's inside a deck",
+        "3": ("info", "Inspect a deck",
               "Only shows information (note types, fields, decks). Does not create any file."),
-        "4": ("langs", "List the translation service's languages",
+        "4": ("langs", "List service languages",
               "Shows which languages the service can translate into (and, with --source, detect)."),
-        "5": ("config", "Show or change saved preferences",
+        "5": ("config", "Saved preferences",
               "The non-secret settings in config.json (provider, model, workers). No API keys."),
-        "6": ("cache", "Translation cache: which saved translations each service reuses",
-              "Shows the reuse mode of each service and lets you change it. No API calls."),
+        "6": ("cache", "Translation cache",
+              "Choose which saved translations each service reuses: shared or isolated. No API calls."),
         "0": ("exit", "Quit", None)}
 
 # Menu entries that need extra positional args beyond their command name.

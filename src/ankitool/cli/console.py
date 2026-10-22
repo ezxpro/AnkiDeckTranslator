@@ -1,6 +1,9 @@
 from pathlib import Path
+import os
 import re
+import shutil
 import sys
+import textwrap
 import time
 
 from ankitool.core.constants import DEFAULT_PROVIDER
@@ -9,6 +12,17 @@ from ankitool.core.errors import Cancelled, ConfigError
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.progress import Reporter
 from ankitool.providers.base import PROVIDERS, make_provider
+
+if os.name == "nt":                                 # enables ANSI colors in Windows consoles
+    os.system("")
+
+
+def _paint(text, code, on):
+    return f"\033[{code}m{text}\033[0m" if on else text
+
+
+def _color_on(stream):
+    return stream.isatty() and not os.environ.get("NO_COLOR")
 
 
 class ConsoleReporter(Reporter):
@@ -79,15 +93,24 @@ class Ui:
 
     @staticmethod
     def choose(title, opts, default):
-        """Single-choice menu. opts: {"1": "Text"} or {"1": ("Text", "short explanation")}."""
-        print(f"\n{title}")
-        for k, v in opts.items():
-            label, desc = v if isinstance(v, tuple) else (v, None)
-            mark = "   <- default (just press Enter)" if k == default else ""
-            print(f"  {k}) {label}{mark}")
+        """Single-choice menu. opts: {"1": "Text"} or {"1": ("Text", "short explanation")}.
+        Numbers and labels are aligned; descriptions are wrapped under their label."""
+        on = _color_on(sys.stdout)
+        width = shutil.get_terminal_size((80, 24)).columns
+        items = [(k, *(v if isinstance(v, tuple) else (v, None))) for k, v in opts.items()]
+        label_w = max(len(label) for _, label, _ in items)
+        print()
+        print(_paint(title, "1", on))
+        print()
+        for k, label, desc in items:
+            mark = f"  {_paint('(default: press Enter)', '32', on)}" if k == default else ""
+            num = _paint(f"{k:>3}", "1;36", on)
+            print(f"{num}  {_paint(label.ljust(label_w), '1', on)}{mark}".rstrip())
             if desc:
-                print(f"       {desc}")
-        print("\nType the option number and press Enter.")
+                for line in textwrap.wrap(desc, max(width - 8, 30)):
+                    print(f"       {_paint(line, '2', on)}")
+            print()
+        print(_paint("Type the number and press Enter.", "2", on))
         while True:
             r = Ui.ask("Choice", default)
             if r in opts:

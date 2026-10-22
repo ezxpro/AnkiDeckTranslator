@@ -14,10 +14,7 @@ def _project_root() -> Path:
     here = Path(__file__).resolve()
     for parent in (here, *here.parents):
         if (parent / ".git").exists():
-            return parent
-    # Installed (no checkout): use the directory four levels up from core/paths.py,
-    # i.e. the project root that holds ``src/``.
-    return here.parents[3]
+            return Path.cwd()
 
 
 SCRIPT_DIR = _project_root()

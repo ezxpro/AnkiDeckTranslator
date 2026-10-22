@@ -8,6 +8,7 @@ from ankitool.core.constants import MIN_RATIO, SAMPLE
 from ankitool.core.errors import ConfigError, ProviderUnavailable
 from ankitool.core.progress import Reporter
 from ankitool.core.text import TextTools, h, lang_base
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 @dataclass
@@ -94,28 +95,32 @@ class FieldTranslator:
                      f"already in cache (no cost): {est.cached}")
         if dry_run:
             return est
-
         for (L, T), texts in todo.items():
             texts = sorted(texts)
             step = self.client.batch_size
-            for i in range(0, len(texts), step):
-                self.rep.check_cancelled()
-                chunk = texts[i:i + step]
-                res = self.client.translate(chunk, target_lang=T, source_lang=L,
-                                            protect_tags=True)
-                if res is None:
-                    raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
-                                              f"(the cache keeps your progress).")
-                for src, r in zip(chunk, res):
-                    out = r.text
-                    ok = TextTools.PROT.findall(out) == TextTools.PROT.findall(src)
-                    if ok:
-                        self.cache.put(T, L, src, out)
-                    else:
-                        # not cached: this text has no saved translation and will be retried next run
-                        self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
-                self.cache.save()
-                self.rep.log(f" [{L}->{T}] {min(i + step, len(texts))}/{len(texts)}")
+            chunks = [texts[i:i + step] for i in range(0, len(texts), step)]
+            done = 0
+            pool = ThreadPoolExecutor(max_workers=self.client.max_workers)
+            try:
+                futures = {pool.submit(self.client.translate, c, target_lang=T,
+                                       source_lang=L, protect_tags=True): c for c in chunks}
+                for fut in as_completed(futures):       # cache/report only on the main thread
+                    self.rep.check_cancelled()
+                    chunk, res = futures[fut], fut.result()
+                    if res is None:
+                        raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
+                                                  f"(the cache keeps your progress).")
+                    for src, r in zip(chunk, res):
+                        out = r.text
+                        if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
+                            self.cache.put(T, L, src, out)
+                        else:
+                            self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
+                    self.cache.save()
+                    done += len(chunk)
+                    self.rep.log(f" [{L}->{T}] {done}/{len(texts)}")
+            finally:
+                pool.shutdown(wait=True, cancel_futures=True)
         return est
 
 class TranslateOperation:

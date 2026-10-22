@@ -73,6 +73,7 @@ class GeminiProvider(TranslationProvider):
     name, label, key_env = "gemini", "Google Gemini", "GEMINI_KEY"
     batch_size = 25                            # smaller than DeepL: keeps the JSON reply reliable
     rate_limit_wait = 20                       # seconds to wait after HTTP 429 before retrying
+    max_workers = 3                            # free tier is rate-limited; tune with the benchmark
 
     def __init__(self, key=None):
         self.model = os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_MODEL

@@ -70,6 +70,7 @@ class TranslationProvider(ABC):
     default_target = "PT-BR"                   # suggested output language code
     batch_size = 40                            # texts per call
     retries = 3
+    max_workers = 1                            # parallel calls; raise per provider if its limits allow
     transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
     cache_tag = None                           # None -> "_<name>" in cache file names
     hidden = False                             # True: only available with --provider, not in the menu

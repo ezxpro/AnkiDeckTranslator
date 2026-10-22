@@ -74,6 +74,7 @@ class TranslationProvider(ABC):
     transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
     cache_tag = None                           # None -> "_<name>" in cache file names
     hidden = False                             # True: only available with --provider, not in the menu
+    on_wait = None                             # optional callback(seconds, reason) before a retry sleep
 
     def __init__(self, key=None):
         self.key = key or load_secret(self.key_env, self.label)
@@ -123,17 +124,25 @@ class TranslationProvider(ABC):
         """Translates with retries; returns None if the service does not respond.
         protect_tags=True protects [sound:...] and {{c1::...}} (restored in the result)."""
         payload = [self.mask(t) for t in texts] if protect_tags else list(texts)
-        for _ in range(self.retries):
+        for attempt in range(self.retries):
             try:
                 res = self._translate(payload, target_lang, source_lang, protect_tags)
                 break
-            except self.transient_errors:
-                time.sleep(3)
+            except self.transient_errors as e:
+                if attempt < self.retries - 1:
+                    self.wait(e)
         else:
             return None
         if protect_tags:
             res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
         return res
+
+    def wait(self, error):
+        """Sleeps before a retry (the error may carry its own `wait` seconds) and reports it."""
+        seconds = getattr(error, "wait", None) or 3
+        if self.on_wait:
+            self.on_wait(seconds, str(error) or type(error).__name__)
+        time.sleep(seconds)
 
     def resolve_target(self, raw):
         """Typed text -> valid output code (in the service's spelling), or None."""

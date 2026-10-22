@@ -119,3 +119,17 @@ def test_missing_sdk_gives_clear_error():
             assert "google-genai" in str(e)
         else:
             raise AssertionError("expected ConfigError")
+
+def test_wait_is_reported_before_retry():
+    state, seen = {"n": 0}, []
+
+    def script(s, items):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise _Retryable("429", 20)
+        return _ok(items)
+    p = FakeGemini(script)
+    p.on_wait = lambda seconds, why: seen.append((seconds, why))
+    with patch("ankitool.providers.base.time.sleep") as sl:
+        assert p.translate(["a"], "PT-BR")[0].text == "PT:a"
+    assert seen == [(20, "429")] and sl.call_args[0][0] == 20

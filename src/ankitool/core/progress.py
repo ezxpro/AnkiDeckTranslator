@@ -26,6 +26,9 @@ class Reporter:
     def warn(self, *a): pass
     def advance(self, label, done, total): pass
 
+    def waiting(self, seconds, reason):
+        self.warn(f" {reason}; waiting {seconds}s before retrying...")
+
     def check_cancelled(self):
         if self.cancel.cancelled:
             raise Cancelled("Cancelled.")

@@ -28,6 +28,7 @@ class ProviderBenchmark:
     def __init__(self, client, calls=8, batch=10, workers=(1, 2, 4, 8), rep=None):
         self.client, self.calls, self.batch = client, calls, batch
         self.workers, self.rep = sorted(set(workers)), rep or Reporter()
+        client.on_wait = self.rep.waiting
 
     def run(self, target, source="EN"):
         texts = [f"Hello world, this is test sentence number {i}." for i in range(self.batch)]

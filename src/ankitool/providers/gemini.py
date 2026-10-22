@@ -50,7 +50,12 @@ Output: ONLY a JSON array with one object per input item:
 
 
 class _Retryable(ConnectionError):
-    """Rate limit, server error or network failure: TranslationProvider.translate retries it."""
+    """Rate limit, server error or network failure: TranslationProvider.translate retries it.
+    `wait` = seconds to wait before the retry (None -> the default)."""
+
+    def __init__(self, msg, wait=None):
+        super().__init__(msg)
+        self.wait = wait
 
 class _BadReply(Exception):
     """The model answered, but not in the requested format (used to split the batch)."""
@@ -100,8 +105,7 @@ class GeminiProvider(TranslationProvider):
                     response_mime_type="application/json"))
         except errors.APIError as e:
             if e.code == 429:
-                time.sleep(self.rate_limit_wait)
-                raise _Retryable("Gemini rate limit reached (HTTP 429)") from e
+                raise _Retryable("Gemini rate limit reached (HTTP 429)", self.rate_limit_wait) from e
             if e.code in (500, 502, 503, 504):
                 raise _Retryable(f"Gemini server error (HTTP {e.code})") from e
             raise ConfigError(f"Gemini rejected the request (HTTP {e.code}): {e.message}") from e
@@ -173,9 +177,10 @@ class GeminiProvider(TranslationProvider):
 
     def detect(self, texts, target_lang):
         # A cheap classification call instead of a full translation.
-        for _ in range(self.retries):
+        for attempt in range(self.retries):
             try:
                 return [lang for _, lang in self._batch(DETECT_PROMPT, list(texts), False)]
-            except self.transient_errors:
-                time.sleep(3)
+            except self.transient_errors as e:
+                if attempt < self.retries - 1:
+                    self.wait(e)
         return None

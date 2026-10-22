@@ -36,6 +36,7 @@ class FieldLanguageDetector:
     def __init__(self, client, cache, target, rep, sample=SAMPLE):
         self.client, self.cache, self.target, self.sample = client, cache, target, sample
         self.rep = rep
+        client.on_wait = rep.waiting
 
     def detect(self, field_values):
         lang_cache = self.cache.lang
@@ -78,6 +79,7 @@ class FieldTranslator:
 
     def __init__(self, client, cache, rep):
         self.client, self.cache, self.rep = client, cache, rep
+        client.on_wait = rep.waiting
 
     def translate(self, chosen, field_values, dry_run=False):
         todo = collections.defaultdict(list)             # (source, output) -> texts

@@ -1,13 +1,45 @@
 from pathlib import Path
 import argparse
+import os
 import re
 import sys
+import textwrap
 
 from ankitool.cache.translation import MODES
 from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
 from ankitool.core.errors import ConfigError
 from ankitool.core.settings import configured_provider
 from ankitool.providers.base import PROVIDERS
+
+
+class WrapHelp(argparse.HelpFormatter):
+    """Wraps the prose of descriptions; lines that start with a space (examples, key lists)
+    and blank lines are kept exactly as written."""
+
+    def _fill_text(self, text, width, indent):
+        out = []
+        for para in text.split("\n"):
+            if not para.strip() or para.startswith(" "):
+                out.append(para)
+            else:
+                out.append(textwrap.fill(para, width, initial_indent=indent, subsequent_indent=indent))
+        return "\n".join(out)
+
+
+def colorize(text):
+    """Adds colors to help text: usage line, section headers and option flags."""
+    def style(t, code):
+        return f"\033[{code}m{t}\033[0m"
+    out = []
+    for line in text.splitlines():
+        if line.startswith("usage:"):
+            line = style("usage:", "1;33") + line[6:]
+        elif line and not line.startswith(" ") and line.endswith(":"):
+            line = style(line, "1;36")
+        else:
+            line = re.sub(r"(?<![\w/])(-{1,2}[A-Za-z][\w-]*)", lambda m: style(m.group(1), "32"), line)
+        out.append(line)
+    return "\n".join(out) + "\n"
 
 
 COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config", "cache")
@@ -20,6 +52,14 @@ class FriendlyParser(argparse.ArgumentParser):
     concise message and then the help of the command being used (or the top-level help),
     so the user immediately sees what arguments are available. The SystemExit it raises
     is still caught by main() (which re-raises it outside the menu)."""
+
+    def print_help(self, file=None):
+        """Help with colors when printed to a terminal (off with NO_COLOR=1 or when redirected)."""
+        file = file or sys.stdout
+        text = self.format_help()
+        if file.isatty() and not os.environ.get("NO_COLOR"):
+            text = colorize(text)
+        file.write(text)
 
     def error(self, message):
         """Print a short message followed by the relevant help, so a bad invocation
@@ -158,9 +198,15 @@ def parse_args(argv=None):
     r = sub.add_parser(
         "reverse", parents=[io, run_opts],
         help="swap front and back of cards (no translation)",
-        description="Swaps front and back by exchanging the fields in the card templates. "
-                    "Default output: <input>_reversed.apkg. Running it again undoes the change. "
-                    "With -y: all note types (cloze is excluded).")
+        description="Swaps the front and back of the cards by exchanging the fields in the card templates. "
+                    "The text is not changed, only which side each field shows on. Default output: "
+                    "<input>_reversed.apkg. Running it again on the result undoes the change. "
+                    "With -y: all note types (cloze is excluded). Use 'info' first to see the fields.",
+        epilog="examples:\n"
+               "  ankitool reverse deck.apkg                       every note type, suggested pairs\n"
+               "  ankitool reverse deck.apkg --notetype Basic --swap Front=Back\n"
+               "  ankitool reverse deck.apkg -o flipped.apkg -f    overwrite flipped.apkg if it exists",
+        formatter_class=WrapHelp)
     r.add_argument("--notetype", action="append", metavar="NAME",
                    help="swap only this note type (can be repeated)")
     r.add_argument("--swap", action="append", metavar="FIELD1=FIELD2",
@@ -169,13 +215,23 @@ def parse_args(argv=None):
 
     sub.add_parser("info", parents=[io, common],
                    help="shows note types, fields and decks of an .apkg",
-                   description="Shows note types, fields and decks of an .apkg "
-                               "(useful for choosing --notetype and --swap). Creates no file.")
+                   description="Shows what is inside an .apkg: each note type with its fields and how many "
+                               "notes use it, the front/back split and the suggested --swap pairs, and the "
+                               "deck tree. Useful before 'translate --field' or 'reverse --swap'. "
+                               "Creates no file and needs no API key.",
+                   epilog="examples:\n"
+                          "  ankitool info deck.apkg",
+                   formatter_class=WrapHelp)
     lg = sub.add_parser("langs",
                         help="list the translation service's languages (target or source)",
-                        description="Shows the languages a service recognizes, as code and name. "
-                                    "By default lists the TARGET languages (the ones you can translate "
-                                    "into); use --source for the languages the service can detect.")
+                        description="Lists the languages a translation service accepts, as code and name. "
+                                    "By default the TARGET languages (what you can translate into). With "
+                                    "--source, the languages it can detect. Codes are what -t and --lang "
+                                    "expect. Needs the service's API key.",
+                        epilog="examples:\n"
+                               "  ankitool langs -p deepl\n"
+                               "  ankitool langs -p gemini --source",
+                        formatter_class=WrapHelp)
     lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
                     help=f"translation service (default: {configured_provider() or DEFAULT_PROVIDER})")
     lg.add_argument("--source", action="store_true",
@@ -184,8 +240,14 @@ def parse_args(argv=None):
 
     b = sub.add_parser("bench", parents=[common],
                        help="measures a service's speed and rate limits (makes real API calls)",
-                       description="Calls the service with 1, 2, 4... parallel workers, reports speed "
-                                   "and errors (rate limits) and suggests max_workers. Uses API quota.")
+                       description="Measures how fast a service is and where it starts to refuse requests. "
+                                   "It makes real API calls with 1, 2, 4... parallel workers and reports "
+                                   "speed and errors (rate limits), then suggests a max_workers value to save "
+                                   "in config.json. It uses your API quota, so run it sparingly.",
+                       epilog="examples:\n"
+                              "  ankitool bench -p gemini\n"
+                              "  ankitool bench -p deepl --calls 4 --batch 20 --workers 1,2",
+                       formatter_class=WrapHelp)
     b.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
                    help=f"translation service (default: {configured_provider() or DEFAULT_PROVIDER})")
     b.add_argument("-t", "--target", metavar="CODE", help="target language (default: the service's default)")
@@ -210,10 +272,38 @@ def parse_args(argv=None):
                                "  ankitool cache use deepl isolated    DeepL reuses only its own translations\n"
                                "  ankitool cache use deepl --reset     DeepL back to shared\n"
                                "  ankitool cache select                choose from a menu (interactive)",
-                        formatter_class=argparse.RawDescriptionHelpFormatter)
+                        formatter_class=WrapHelp)
     ca_sub = ca.add_subparsers(dest="action", metavar="ACTION", parser_class=FriendlyParser)
-    ca_sub.add_parser("show", parents=[common, cdir], help="show each service's mode and stored count")
-    ca_sub.add_parser("select", parents=[common, cdir], help="choose service and mode from a menu")
+    ca_sub.add_parser("show", parents=[common, cdir], help="show each service's mode and stored count",
+                      description="Shows the cache file, the reuse mode of each service (from config.json, "
+                                  "or the default shared), how many translations each service has stored, "
+                                  "and the totals. Reads only; no API calls.",
+                      epilog="example:\n  ankitool cache show",
+                      formatter_class=WrapHelp)
+    ca_sub.add_parser("select", parents=[common, cdir], help="choose service and mode from a menu",
+                      description="Interactive: first pick the service, then its mode (shared or isolated). "
+                                  "Saved to config.json. Same as 'cache use SERVICE MODE', without typing it. "
+                                  "Needs a terminal (not -y).",
+                      epilog="example:\n  ankitool cache select",
+                      formatter_class=WrapHelp)
+    ci = ca_sub.add_parser("invalidate", parents=[common, cdir],
+                           help="delete saved translations (by service, language or text), or everything",
+                           description="Deletes the saved translations and deck names that match ALL the "
+                                       "filters given. Text languages are kept. Asks first unless -y. "
+                                       "Texts deleted this way are sent to the service again next time.",
+                           epilog="examples:\n"
+                                  "  ankitool cache invalidate -p gemini              all of Gemini's\n"
+                                  "  ankitool cache invalidate -p gemini -t PT-BR --lang IT\n"
+                                  "  ankitool cache invalidate --text \"ciao\"          one text, all services\n"
+                                  "  ankitool cache invalidate --all -y               empty the cache",
+                           formatter_class=WrapHelp)
+    ci.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
+                    help="only this service's translations")
+    ci.add_argument("-t", "--target", metavar="CODE", help="only this target language, e.g. PT-BR")
+    ci.add_argument("--lang", metavar="CODE", help="only this source language, e.g. IT")
+    ci.add_argument("--text", metavar="TEXT", help="only this original text")
+    ci.add_argument("--all", action="store_true",
+                    help="delete everything: translations, text languages and deck names")
     cu = ca_sub.add_parser("use", parents=[common, cdir],
                            help="set (or show) one service's mode: shared or isolated",
                            description="Sets the reuse mode of one service, saved in config.json. "
@@ -222,7 +312,7 @@ def parse_args(argv=None):
                                   "  ankitool cache use deepl isolated\n"
                                   "  ankitool cache use gemini\n"
                                   "  ankitool cache use gemini --reset",
-                           formatter_class=argparse.RawDescriptionHelpFormatter)
+                           formatter_class=WrapHelp)
     cu.add_argument("service", nargs="?", metavar="SERVICE", choices=sorted(PROVIDERS),
                     help="translation service, e.g. deepl, gemini, groq, openai")
     cu.add_argument("mode", nargs="?", metavar="MODE", choices=list(MODES),
@@ -231,10 +321,23 @@ def parse_args(argv=None):
 
     c = sub.add_parser("config", parents=[common],
                        help="show or change the saved preferences (config.json)",
-                       description="Saved preferences, no API keys (those stay in .env). "
-                                   "With no action it shows the current settings (same as 'config show'). "
-                                   "Examples: config set provider groq | config set groq.max_workers 3 | "
-                                   "config unset provider | config show")
+                       description="Saved preferences in config.json: the default service, and per-service "
+                                   "model, base_url, max_workers and cache mode. API keys are never stored "
+                                   "here (they stay in .env or environment variables). Lookup order: "
+                                   "command-line flag, then environment/.env, then config.json, then the "
+                                   "built-in default. With no action it shows the settings.",
+                       epilog="keys:\n"
+                              "  provider                       default service (deepl, gemini, groq, openai)\n"
+                              "  SERVICE.model                  model name for that service\n"
+                              "  SERVICE.base_url               API address (https only, except localhost)\n"
+                              "  SERVICE.max_workers            parallel requests (whole number >= 1)\n"
+                              "  SERVICE.cache                  cache mode: shared or isolated\n"
+                              "examples:\n"
+                              "  ankitool config show\n"
+                              "  ankitool config set provider groq\n"
+                              "  ankitool config set gemini.cache isolated\n"
+                              "  ankitool config unset provider",
+                       formatter_class=WrapHelp)
     c.add_argument("action", nargs="?", choices=["show", "set", "unset"], default="show",
                    help="what to do: show (default), set, or unset a preference")
     c.add_argument("key", nargs="?", metavar="KEY",

@@ -77,6 +77,31 @@ class CacheApp:
         print(f"{o.service}: now {service_mode(o.service) if not o.reset else DEFAULT_MODE} "
               f"({MODE_HELP[DEFAULT_MODE if o.reset else o.mode]})")
 
+    def _invalidate(self):
+        o = self.opts
+        if o.all and any([o.provider, o.target, o.lang, o.text]):
+            raise ConfigError("--all cannot be combined with --provider, --target, --lang or --text")
+        if not o.all and not any([o.provider, o.target, o.lang, o.text]):
+            raise ConfigError("invalidate needs a filter (--provider, --target, --lang or --text), "
+                              "or --all. Example: ankitool cache invalidate -p gemini")
+        if o.all:
+            question = "Delete EVERYTHING in the cache (translations, text languages, deck names)?"
+        else:
+            parts = [f"{k}={v}" for k, v in (("service", o.provider), ("target", o.target),
+                                              ("language", o.lang), ("text", o.text)) if v]
+            question = f"Delete the translations and deck names matching {', '.join(parts)}?"
+        if not Ui.auto and not Ui.yes(question, "n"):
+            raise Cancelled("Cancelled. Nothing was deleted.")
+        cache = self._cache()
+        if o.all:
+            tr, lang, dk = cache.clear_all()
+            print(f"Removed {tr} translations, {lang} text languages and {dk} deck names.")
+        else:
+            tr, dk = cache.invalidate(service=o.provider, target=o.target.upper() if o.target else None,
+                                      lang=o.lang.upper() if o.lang else None, text=o.text)
+            print(f"Removed {tr} translations and {dk} deck names.")
+        cache.save()
+
     def _select(self):
         if Ui.auto:
             raise ConfigError("'cache select' needs an interactive terminal. "

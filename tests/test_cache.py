@@ -73,3 +73,24 @@ def test_unknown_file_is_kept_as_backup_not_read(tmp_path):
     c = new(tmp_path)
     assert c.count() == 0
     assert (tmp_path / "cache.json.bak").exists()
+
+
+def test_invalidate_by_service_keeps_the_others(tmp_path):
+    c = new(tmp_path)
+    c.put("PT-BR", "IT", "ciao", "olá", "deepl")
+    c.put("PT-BR", "IT", "ciao", "oi", "gemini")
+    c.put("EN-US", "IT", "ciao", "hi", "gemini")
+    assert c.invalidate(service="gemini", target="PT-BR") == (1, 0)
+    assert c.get("PT-BR", "IT", "ciao", "deepl", "isolated") == "olá"
+    assert c.get("EN-US", "IT", "ciao", "gemini", "isolated") == "hi"
+
+
+def test_invalidate_by_text_and_clear_all(tmp_path):
+    c = new(tmp_path)
+    c.put("PT-BR", "IT", "ciao", "olá", "deepl")
+    c.put("PT-BR", "IT", "gatto", "gato", "deepl")
+    c.lang["h"] = "IT"
+    assert c.invalidate(text="ciao") == (1, 0)
+    assert c.get("PT-BR", "IT", "gatto", "deepl") == "gato"
+    assert c.clear_all() == (1, 1, 0)
+    assert c.count() == 0 and not c.lang

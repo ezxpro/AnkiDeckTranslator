@@ -116,17 +116,20 @@ class LLMProvider(TranslationProvider):
 
     def _batch(self, system, texts, with_text):
         """-> list of (translated_text_or_None, detected_lang) in the order of `texts`.
-        A malformed reply is retried once as the same batch; only then is the batch split in halves
-        (each split multiplies the requests). A single text that still fails goes to the retry loop."""
+        Batches of 2+: a malformed reply is retried once as the same batch, then split in halves.
+        A single text is not retried here; the caller's retry loop handles it."""
         payload = json.dumps([{"id": i, "text": t} for i, t in enumerate(texts)], ensure_ascii=False)
+        if len(texts) == 1:
+            try:
+                return self._parse(self._generate(system, payload), 1, with_text)
+            except _BadReply as e:
+                raise _Retryable(str(e)) from e
         last = None
         for _ in range(2):
             try:
                 return self._parse(self._generate(system, payload), len(texts), with_text)
             except _BadReply as e:
                 last = e
-        if len(texts) == 1:
-            raise _Retryable(str(last)) from last
         mid = len(texts) // 2
         return (self._batch(system, texts[:mid], with_text)
                 + self._batch(system, texts[mid:], with_text))

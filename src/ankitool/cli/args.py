@@ -12,6 +12,35 @@ from ankitool.providers.base import PROVIDERS
 COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config")
 
 
+class FriendlyParser(argparse.ArgumentParser):
+    """ArgumentParser that prints short errors followed by the relevant help text.
+
+    On bad input, parse_args() calls error(); instead of the raw usage dump we print a
+    concise message and then the help of the command being used (or the top-level help),
+    so the user immediately sees what arguments are available. The SystemExit it raises
+    is still caught by main() (which re-raises it outside the menu)."""
+
+    def error(self, message):
+        """Print a short message followed by the relevant help, so a bad invocation
+        immediately shows the user what arguments the command takes."""
+        # Shorten argparse's "the following arguments are required: X" phrasing.
+        message = message.replace("the following arguments are required: ", "missing: ")
+        # Shorten the noisy "argument action: invalid choice: ..." phrasing.
+        message = message.replace("argument ", "").replace("invalid choice: ", "")
+        print(f"{self.prog}: error: {message}", file=sys.stderr)
+        # Show the help of the *deepest* known subcommand (e.g. "config"), so the user
+        # sees that command's arguments rather than the top-level list.
+        sub = self
+        for _a in self._actions:
+            if (isinstance(_a, argparse._SubParsersAction)
+                    and _a.choices and getattr(_a, "dest", None) == "command"):
+                picked = next((v for k, v in _a.choices.items() if k in sys.argv), None)
+                if picked is not None:
+                    sub = picked
+        sub.print_help(sys.stderr)
+        self.exit(2)
+
+
 def _looks_like_input(token):
     """True if token is plausible as the shortcut's input .apkg (not a mistyped command)."""
     return token.lower().endswith(".apkg") or "/" in token or "\\" in token or token in (".", "..")
@@ -55,23 +84,23 @@ def parse_args(argv=None):
                 f"Use '-h' for help, or a .apkg file to translate it directly."
             )
 
-    p = argparse.ArgumentParser(
+    p = FriendlyParser(
         prog=Path(sys.argv[0]).name,
         description="Tools for Anki .apkg decks. With no arguments, opens the "
                     "interactive mode (menu). Use 'COMMAND -h' to see each command's options.",
         epilog="For any command, whatever is not given as an option is asked for, "
                "unless -y/--yes is used.")
     p.add_argument("-V", "--version", action="version", version=f"%(prog)s {VERSION}")
-    sub = p.add_subparsers(dest="command", metavar="COMMAND")
+    sub = p.add_subparsers(dest="command", metavar="COMMAND", parser_class=FriendlyParser)
 
-    io = argparse.ArgumentParser(add_help=False)
+    io = FriendlyParser(add_help=False)
     io.add_argument("input", nargs="?", metavar="INPUT", help="input .apkg file")
-    common = argparse.ArgumentParser(add_help=False)
+    common = FriendlyParser(add_help=False)
     common.add_argument("-y", "--yes", action="store_true",
                         help="don't ask anything: use each command's defaults")
     common.add_argument("-q", "--quiet", action="store_true",
                         help="only show warnings and the final result (no progress messages)")
-    run_opts = argparse.ArgumentParser(add_help=False, parents=[common])
+    run_opts = FriendlyParser(add_help=False, parents=[common])
     run_opts.add_argument("-o", "--output", metavar="OUTPUT", help="output .apkg file")
     run_opts.add_argument("-f", "--force", action="store_true",
                           help="overwrite the output file if it already exists "
@@ -164,10 +193,12 @@ def parse_args(argv=None):
 
     c = sub.add_parser("config", parents=[common],
                        help="show or change the saved preferences (config.json)",
-                       description="Saved preferences, no API keys (those stay in .env). Examples: "
-                                   "config set provider groq | config set groq.max_workers 3 | "
+                       description="Saved preferences, no API keys (those stay in .env). "
+                                   "With no action it shows the current settings (same as 'config show'). "
+                                   "Examples: config set provider groq | config set groq.max_workers 3 | "
                                    "config unset provider | config show")
-    c.add_argument("action", choices=["show", "set", "unset"])
+    c.add_argument("action", nargs="?", choices=["show", "set", "unset"], default="show",
+                   help="what to do: show (default), set, or unset a preference")
     c.add_argument("key", nargs="?", metavar="KEY",
                    help="provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
     c.add_argument("value", nargs="?", metavar="VALUE", help="new value (for 'set')")

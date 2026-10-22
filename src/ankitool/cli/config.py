@@ -38,6 +38,13 @@ class ConfigApp:
     def run(self):
         o, st = self.opts, get_settings()
         if o.action == "show":
+            print("Saved preferences (non-secret settings).")
+            print("API keys live in .env, not here — see '.env.example'.")
+            print("Command:  ankitool config show | set <KEY> <VALUE> | unset <KEY>")
+            print("  Keys:   provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+            print("  Example: ankitool config set provider groq")
+            print("           ankitool config set groq.max_workers 3")
+            print()
             print(f"Settings file: {st.path}" + ("" if st.path.exists() else " (not created yet)"))
             print(json.dumps(st.data, indent=2, ensure_ascii=False) if st.data
                   else "(empty: built-in defaults)")

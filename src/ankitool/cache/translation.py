@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from ankitool.core.progress import Reporter
-from ankitool.core.text import h
+from ankitool.core.text import TextTools, h
 
 MODES = ("shared", "isolated")
 DEFAULT_MODE = "shared"
@@ -159,6 +159,8 @@ class CacheView:
         return self.cache.lang
 
     def read(self, T, L, text):
+        if not TextTools.has_letters(text):          # numbers/symbols are never translated
+            return None
         return self.cache.get(T, L, text, self.service, self.mode)
 
     get = read                                     # used by AnkiCollection.apply_translations

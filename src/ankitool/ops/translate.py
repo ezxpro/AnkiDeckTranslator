@@ -47,7 +47,7 @@ class FieldLanguageDetector:
         plan, to_send, seen = {}, [], set()
         for key, vs in field_values.items():           # 1) plan every field first
             self.rep.check_cancelled()
-            uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs))
+            uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs if TextTools.has_letters(v)))
             known = [p for p in uniq if h(p) in lang_cache]
             unknown = [p for p in uniq if h(p) not in lang_cache]
             pick = random.sample(known, min(self.sample, len(known)))
@@ -99,7 +99,7 @@ class FieldTranslator:
         queued, cached = set(), set()
         for (mid, f), (L, T) in chosen.items():
             for v in field_values[(mid, f)]:
-                if (L, T, v) in cached or (L, T, v) in queued:
+                if not TextTools.has_letters(v) or (L, T, v) in cached or (L, T, v) in queued:
                     continue
                 if self.view.read(T, L, v) is not None:
                     cached.add((L, T, v))

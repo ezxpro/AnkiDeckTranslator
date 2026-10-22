@@ -23,6 +23,11 @@ class TextTools:
     def plain(s):
         return re.sub(r"\[sound:[^\]]+\]|<[^>]+>|&\w+;|\{\{c\d+::|\}\}", "", s).strip()
 
+    @staticmethod
+    def has_letters(s):
+        """False for texts with no letters (numbers, punctuation, symbols): nothing to translate."""
+        return re.search(r"[^\W\d_]", TextTools.plain(s)) is not None
+
 h = TextTools.h
 
 def lang_base(code):

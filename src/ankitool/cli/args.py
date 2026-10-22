@@ -10,7 +10,7 @@ from ankitool.core.settings import configured_provider
 from ankitool.providers.base import PROVIDERS
 
 
-COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config")
+COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config", "cache")
 
 
 class FriendlyParser(argparse.ArgumentParser):
@@ -195,6 +195,39 @@ def parse_args(argv=None):
                    help="texts per call (default: 10)")
     b.add_argument("--workers", type=workers_type, default=[1, 2, 4, 8], metavar="LIST",
                    help="worker counts to test, comma-separated (default: 1,2,4,8)")
+
+    cdir = FriendlyParser(add_help=False)
+    cdir.add_argument("--cache-dir", metavar="FOLDER",
+                      help="folder of cache.json (default: the script's folder)")
+    ca = sub.add_parser("cache", parents=[common, cdir],
+                        help="translation cache: which saved translations each service reuses",
+                        description="Shows or changes how each service reuses the translations already in "
+                                    "cache.json. shared (default) = reuse any service's translation when "
+                                    "its own is missing; isolated = only its own. Set per service, "
+                                    "or per run with translate --cache-mode.",
+                        epilog="examples:\n"
+                               "  ankitool cache                       show each service's mode\n"
+                               "  ankitool cache use deepl isolated    DeepL reuses only its own translations\n"
+                               "  ankitool cache use deepl --reset     DeepL back to shared\n"
+                               "  ankitool cache select                choose from a menu (interactive)",
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ca_sub = ca.add_subparsers(dest="action", metavar="ACTION", parser_class=FriendlyParser)
+    ca_sub.add_parser("show", parents=[common, cdir], help="show each service's mode and stored count")
+    ca_sub.add_parser("select", parents=[common, cdir], help="choose service and mode from a menu")
+    cu = ca_sub.add_parser("use", parents=[common, cdir],
+                           help="set (or show) one service's mode: shared or isolated",
+                           description="Sets the reuse mode of one service, saved in config.json. "
+                                       "Without MODE it shows the current one. --reset goes back to shared.",
+                           epilog="examples:\n"
+                                  "  ankitool cache use deepl isolated\n"
+                                  "  ankitool cache use gemini\n"
+                                  "  ankitool cache use gemini --reset",
+                           formatter_class=argparse.RawDescriptionHelpFormatter)
+    cu.add_argument("service", nargs="?", metavar="SERVICE", choices=sorted(PROVIDERS),
+                    help="translation service, e.g. deepl, gemini, groq, openai")
+    cu.add_argument("mode", nargs="?", metavar="MODE", choices=list(MODES),
+                    help="shared or isolated (omit to show the current mode)")
+    cu.add_argument("--reset", action="store_true", help="remove the saved mode (back to shared)")
 
     c = sub.add_parser("config", parents=[common],
                        help="show or change the saved preferences (config.json)",

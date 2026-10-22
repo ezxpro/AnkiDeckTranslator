@@ -153,6 +153,7 @@ ankitool reverse  deck.apkg             # swap the front and back of the cards (
 ankitool info      deck.apkg            # see note types, fields and decks (creates no file)
 ankitool langs                          # list the languages a service can translate into
 ankitool config show                    # see the saved preferences (config.json)
+ankitool cache                          # see how each service reuses saved translations
 ankitool bench                          # measure a service's speed / rate limits (real API calls)
 ```
 
@@ -164,6 +165,7 @@ ankitool bench                          # measure a service's speed / rate limit
 | `langs`     | List a service's target (or `--source`) languages | *(no file)* |
 | `bench`     | Measure a service's speed/rate limits (real API calls) | *(no file)* |
 | `config`    | Show/change saved preferences (`config.json`) | *(no file)* |
+| `cache`     | Show or change which saved translations each service reuses | *(no file)* |
 
 Common flags on most commands: `-y/--yes` (don't ask, use defaults), `-q/--quiet` (only
 warnings and the final result). Any option you don't provide and isn't defaulted will be asked
@@ -245,6 +247,19 @@ ankitool config unset provider
 
 Keys are `provider` or `SERVICE.model` / `SERVICE.base_url` / `SERVICE.max_workers`. No API
 keys are stored here — those stay in `.env`. With no action it defaults to `show`.
+
+### `cache`
+
+```
+ankitool cache                                   # show each service's mode and stored count
+ankitool cache use SERVICE [shared|isolated]     # show or set one service's mode
+ankitool cache use SERVICE --reset               # back to shared
+ankitool cache select                            # choose service and mode from a menu
+```
+
+The mode is saved in `config.json` per service (`providers.SERVICE.cache`). It can also be set with
+`ankitool config set SERVICE.cache MODE`. The interactive menu has the same choice under
+"Translation cache". See [Caching](#caching) for what each mode does.
 
 ## How it works
 

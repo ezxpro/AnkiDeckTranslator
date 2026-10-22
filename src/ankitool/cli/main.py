@@ -2,6 +2,7 @@ import sys
 
 from ankitool.cli.args import parse_args
 from ankitool.cli.bench import BenchApp
+from ankitool.cli.cache import CacheApp
 from ankitool.cli.config import ConfigApp
 from ankitool.cli.console import Ui, choose_provider
 from ankitool.cli.info import InfoApp
@@ -20,10 +21,12 @@ MENU = {"1": ("translate", "Translate a deck",
               "Shows which languages the service can translate into (and, with --source, detect)."),
         "5": ("config", "Show or change saved preferences",
               "The non-secret settings in config.json (provider, model, workers). No API keys."),
+        "6": ("cache", "Translation cache: which saved translations each service reuses",
+              "Shows the reuse mode of each service and lets you change it. No API calls."),
         "0": ("exit", "Quit", None)}
 
 # Menu entries that need extra positional args beyond their command name.
-MENU_ARGV = {"config": ["config", "show"]}
+MENU_ARGV = {"config": ["config", "show"], "cache": ["cache", "select"]}
 
 BACK_TO_MENU = "\nDo you want to do anything else?\n  (y = back to the main menu, n = quit the program)"
 
@@ -57,6 +60,8 @@ def main(argv=None):
                 BenchApp(opts).run()
             elif opts.command == "config":
                 ConfigApp(opts).run()
+            elif opts.command == "cache":
+                CacheApp(opts).run()
             elif opts.command == "langs":
                 provider = choose_provider(opts)
                 if getattr(opts, "source", False):

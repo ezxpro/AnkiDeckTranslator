@@ -66,4 +66,4 @@ class GroqProvider(OpenAICompatProvider):
     """Groq (free tier: generous daily limits). Key: GROQ_KEY; optional GROQ_MODEL / GROQ_BASE_URL."""
 
     name, label, key_env = "groq", "Groq", "GROQ_KEY"
-    default_base_url, default_model = "https://api.groq.com/openai/v1", "llama-3.1-8b-instant"
+    default_base_url, default_model = "https://api.groq.com/openai/v1", "openai/gpt-oss-20b"

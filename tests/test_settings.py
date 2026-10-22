@@ -1,3 +1,4 @@
+import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,7 +72,11 @@ def test_provider_uses_config_but_env_wins():
     st.set("cfg-model", "providers", "groq", "model"); st.set(7, "providers", "groq", "max_workers")
     st.set("http://cfg/v1", "providers", "groq", "base_url")
     with patch("ankitool.core.settings._instance", st):
-        p = GroqProvider(key="k")
-        assert (p.model, p.base_url, p.max_workers) == ("cfg-model", "http://cfg/v1", 7)
-        with patch.dict("os.environ", {"GROQ_MODEL": "env-model"}):
-            assert GroqProvider(key="k").model == "env-model"
+        # Isolate from the developer's .env file (which may set GROQ_MODEL/GROQ_BASE_URL),
+        # so config.json is the only source unless the environment is set explicitly.
+        with patch("ankitool.providers.openai_compat.setting",
+                   side_effect=lambda name, default="": os.environ.get(name, default)):
+            p = GroqProvider(key="k")
+            assert (p.model, p.base_url, p.max_workers) == ("cfg-model", "http://cfg/v1", 7)
+            with patch.dict("os.environ", {"GROQ_MODEL": "env-model"}):
+                assert GroqProvider(key="k").model == "env-model"

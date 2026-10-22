@@ -9,6 +9,7 @@ class StubClient:
     """Mimics the provider contract: masks the tags, translates, and unmasks the result."""
     label = "stub"
     batch_size = 40
+    max_workers = 1
 
     def __init__(self, reply):
         self.reply = reply

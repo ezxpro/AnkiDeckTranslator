@@ -1,6 +1,7 @@
 from pathlib import Path
 import collections
 import tempfile
+import shutil
 from anki.collection import (Collection, ImportAnkiPackageRequest,
                              ImportAnkiPackageOptions, ExportAnkiPackageOptions)
 
@@ -16,20 +17,21 @@ class AnkiCollection:
         self.src = Path(src)
         self.keep_scheduling, self.legacy = keep_scheduling, legacy
         self.col = None
+        self.tmp_dir = None
         self.notes = []
         self.model_names = {}                                  # mid -> note type name
         self.field_values = collections.defaultdict(list)      # (mid, field) -> values with text
 
     def import_package(self):
         self.rep.log(f"importing {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
-        db_path = Path(tempfile.mkdtemp()) / "collection.anki2"
-        self.col = Collection(str(db_path))
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.col = Collection(str(self.tmp_dir / "collection.anki2"))
         with Heartbeat(self.rep, "importing deck"):
             self.col.import_anki_package(ImportAnkiPackageRequest(
                 package_path=str(self.src), options=ImportAnkiPackageOptions(
                     with_scheduling=self.keep_scheduling,
                     with_deck_configs=self.keep_scheduling)))
-
+            
     def load_notes(self):
         for nid in track(self.rep, self.col.find_notes(""), "loading notes"):
             n = self.col.get_note(nid)
@@ -90,3 +92,6 @@ class AnkiCollection:
         if self.col:
             self.col.close()
             self.col = None
+        if self.tmp_dir:
+            shutil.rmtree(self.tmp_dir, ignore_errors=True)   # remove the temp copy of the deck
+            self.tmp_dir = None

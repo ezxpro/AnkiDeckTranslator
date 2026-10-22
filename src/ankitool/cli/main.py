@@ -16,7 +16,14 @@ MENU = {"1": ("translate", "Translate a deck",
               "What shows on the front moves to the back, and vice versa. The text does not change."),
         "3": ("info", "See what's inside a deck",
               "Only shows information (note types, fields, decks). Does not create any file."),
+        "4": ("langs", "List the translation service's languages",
+              "Shows which languages the service can translate into (and, with --source, detect)."),
+        "5": ("config", "Show or change saved preferences",
+              "The non-secret settings in config.json (provider, model, workers). No API keys."),
         "0": ("exit", "Quit", None)}
+
+# Menu entries that need extra positional args beyond their command name.
+MENU_ARGV = {"config": ["config", "show"]}
 
 BACK_TO_MENU = "\nDo you want to do anything else?\n  (y = back to the main menu, n = quit the program)"
 
@@ -38,7 +45,7 @@ def main(argv=None):
                 key = Ui.choose("What do you want to do?", options, "1")
                 if key == "0":
                     break
-                opts = parse_args([MENU[key][0]])
+                opts = parse_args(MENU_ARGV.get(MENU[key][0], [MENU[key][0]]))
 
             Ui.auto = getattr(opts, "yes", False)
 
@@ -52,7 +59,7 @@ def main(argv=None):
                 ConfigApp(opts).run()
             elif opts.command == "langs":
                 provider = choose_provider(opts)
-                if opts.source:
+                if getattr(opts, "source", False):
                     Ui.show_langs("Source languages the service recognizes (code and name):",
                                   provider.source_langs)
                 else:

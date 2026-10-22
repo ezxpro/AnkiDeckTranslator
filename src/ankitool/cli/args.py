@@ -4,11 +4,17 @@ import re
 import sys
 
 from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
+from ankitool.core.errors import ConfigError
 from ankitool.core.settings import configured_provider
 from ankitool.providers.base import PROVIDERS
 
 
 COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config")
+
+
+def _looks_like_input(token):
+    """True if token is plausible as the shortcut's input .apkg (not a mistyped command)."""
+    return token.lower().endswith(".apkg") or "/" in token or "\\" in token or token in (".", "..")
 
 def positive_int(s):
     try:
@@ -40,7 +46,14 @@ def ratio_type(s):
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "-V", "--version"):
-        argv.insert(0, "translate")                      # shortcut: script deck.apkg -t PT-BR
+        if _looks_like_input(argv[0]):
+            argv.insert(0, "translate")                  # shortcut: script deck.apkg -t PT-BR
+        else:
+            # A bare word that is neither a command nor a file: probably a typo.
+            raise ConfigError(
+                f"Unknown command '{argv[0]}'. Available: {', '.join(COMMANDS)}. "
+                f"Use '-h' for help, or a .apkg file to translate it directly."
+            )
 
     p = argparse.ArgumentParser(
         prog=Path(sys.argv[0]).name,
@@ -124,8 +137,11 @@ def parse_args(argv=None):
                    help="shows note types, fields and decks of an .apkg",
                    description="Shows note types, fields and decks of an .apkg "
                                "(useful for choosing --notetype and --swap). Creates no file.")
-    lg = sub.add_parser("langs", parents=[common],
-                        help="list the translation service's languages (target or source)")
+    lg = sub.add_parser("langs",
+                        help="list the translation service's languages (target or source)",
+                        description="Shows the languages a service recognizes, as code and name. "
+                                    "By default lists the TARGET languages (the ones you can translate "
+                                    "into); use --source for the languages the service can detect.")
     lg.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
                     help=f"translation service (default: {configured_provider() or DEFAULT_PROVIDER})")
     lg.add_argument("--source", action="store_true",
@@ -185,4 +201,12 @@ def parse_args(argv=None):
             if len(parts) != 2 or not all(parts) or parts[0] == parts[1] or seen & set(parts):
                 r.error(f"--swap invalid: '{item}'. Use FIELD1=FIELD2, without repeating fields")
             seen.update(parts)
+    elif opts.command == "config":
+        if opts.action in ("set", "unset") and not opts.key:
+            c.error(f"'config {opts.action}' needs a KEY: provider, or "
+                    f"SERVICE.model / SERVICE.base_url / SERVICE.max_workers")
+        if opts.action == "set" and opts.value is None:
+            c.error(f"'config set {opts.key}' needs a VALUE")
+        if opts.action == "show" and opts.key:
+            c.error("'config show' takes no KEY or VALUE")
     return opts

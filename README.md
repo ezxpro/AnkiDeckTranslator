@@ -10,6 +10,18 @@ ankitool translate deck.apkg    # or: python -m ankitool ...   or: python AnkiTr
 pytest
 ```
 
+Run `ankitool` with no arguments to get the interactive menu, or `ankitool -h` to list the
+commands. The main ones:
+
+```
+ankitool translate deck.apkg            # translate the card text (and, optionally, deck names)
+ankitool reverse  deck.apkg             # swap the front and back of the cards (no translation)
+ankitool info      deck.apkg            # see note types, fields and decks (creates no file)
+ankitool langs                          # list the languages a service can translate into
+ankitool config show                    # see the saved preferences (config.json)
+ankitool bench                          # measure a service's speed / rate limits (real API calls)
+```
+
 ## Layout
 
 ```

@@ -62,18 +62,25 @@ class Settings:
         os.replace(tmp, self.path)                     # never leaves a half-written file
 
 
+def _read_env_file(env_file, name):
+    """Value of `name` in a NAME=value file (inline '# comments' removed), or \"\" if absent."""
+    if not env_file.exists():
+        return ""
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            if k.removeprefix("export ").strip() == name:
+                return v.split(" #", 1)[0].strip().strip('"').strip("'")
+    return ""
+
+
 def env_value(name, env_file=None):
-    """Value of `name` from the environment, else from the .env file next to the script ("" if absent)."""
+    """Value of `name` from the environment, else from the .env file next to the script (\"\" if absent)."""
     value = os.environ.get(name, "").strip()
-    env_file = Path(env_file) if env_file else SCRIPT_DIR / ".env"
-    if not value and env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                if k.removeprefix("export ").strip() == name:
-                    return v.strip().strip('"').strip("'")
-    return value
+    if value:
+        return value
+    return _read_env_file(Path(env_file) if env_file else SCRIPT_DIR / ".env", name)
 
 
 _instance = None

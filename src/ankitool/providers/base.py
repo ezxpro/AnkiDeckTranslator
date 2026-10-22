@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-import os
 import time
+from ankitool.core.settings import env_value
 
 from ankitool.core.errors import ConfigError
 from ankitool.core.paths import SCRIPT_DIR
@@ -21,20 +21,9 @@ class TranslationResult:
     detected_source_lang: str = None           # detected source language (provider's spelling)
 
 def load_secret(env_name, label):
-    """Looks for the key in the environment variable <env_name>; if not found, reads the .env
-    file next to the script (line in NAME=value format)."""
-    key = os.environ.get(env_name, "").strip()
-    if not key:
-        env_file = SCRIPT_DIR / ".env"
-        if env_file.exists():
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, value = line.split("=", 1)
-                if name.removeprefix("export ").strip() == env_name:
-                    key = value.split("#", 1)[0].strip().strip('"').strip("'")
-                    break
+    """Looks for the key in the environment variable <env_name>, then in the .env file next to
+    the script. Inline '# comments' are removed the same way as for other settings."""
+    key = env_value(env_name)
     if not key:
         raise ConfigError(f"API key for {label} not found. Set the environment variable "
                           f"{env_name} or create a .env file next to the script with:\n"

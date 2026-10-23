@@ -38,6 +38,8 @@ def colorize(text):
             line = style(line, "1;36")
         else:
             line = re.sub(r"(?<![\w/])(-{1,2}[A-Za-z][\w-]*)", lambda m: style(m.group(1), "32"), line)
+            if line.lstrip().startswith("ankitool"):
+                line = line.replace("ankitool", style("ankitool", "1;33"), 1)
         out.append(line)
     return "\n".join(out) + "\n"
 

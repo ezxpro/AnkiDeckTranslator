@@ -10,7 +10,7 @@ from ankitool.cache.translation import CacheView, DEFAULT_MODE
 from ankitool.core.constants import MIN_RATIO, SAMPLE
 from ankitool.core.errors import ConfigError, ProviderUnavailable
 from ankitool.core.progress import Reporter
-from ankitool.core.text import TextTools, h, lang_base
+from ankitool.core.text import TextTools, lang_base
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -23,7 +23,7 @@ class TranslateConfig:
     skip_fields: list = field(default_factory=list)
     keep_scheduling: bool = False
     legacy: bool = True
-    cache_mode: str = DEFAULT_MODE                       # shared | isolated
+    cache_mode: str = DEFAULT_MODE                       # shared | provider | isolated
 
 @dataclass
 class Estimate:
@@ -48,8 +48,8 @@ class FieldLanguageDetector:
         for key, vs in field_values.items():           # 1) plan every field first
             self.rep.check_cancelled()
             uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs if TextTools.has_letters(v)))
-            known = [p for p in uniq if h(p) in lang_cache]
-            unknown = [p for p in uniq if h(p) not in lang_cache]
+            known = [p for p in uniq if p in lang_cache]
+            unknown = [p for p in uniq if p not in lang_cache]
             pick = random.sample(known, min(self.sample, len(known)))
             fresh = random.sample(unknown, min(max(self.sample - len(pick), 0), len(unknown)))
             plan[key] = (pick, fresh)
@@ -68,14 +68,14 @@ class FieldLanguageDetector:
                 raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
                                           f"(the cache keeps your progress).")
             for p, lang in zip(chunk, langs):
-                lang_cache[h(p)] = lang
+                self.cache.set_lang(p, lang, self.client.name)
             sent += len(chunk)
         detected = {}
         for key, (pick, fresh) in plan.items():         # 3) majority language per field
             sample = pick + fresh
             if not sample:                              # empty field (all text filtered out)
                 continue
-            lang, cnt = collections.Counter(lang_cache[h(p)] for p in sample).most_common(1)[0]
+            lang, cnt = collections.Counter(lang_cache[p] for p in sample).most_common(1)[0]
             ex = re.sub(r"\s+", " ", sample[0])[:45]
             detected[key] = (lang, cnt / len(sample), ex)
 
@@ -152,7 +152,7 @@ class TranslateOperation:
         self.client, self.cache, self.cfg = client, cache, cfg
         self.rep = rep or Reporter()
         self.target, self.tbase = cfg.target, lang_base(cfg.target)
-        self.view = CacheView(cache, client.name, cfg.cache_mode)
+        self.view = CacheView(cache, client.name, client.variant, cfg.cache_mode)
         self.anki = None
 
     def open(self, src):

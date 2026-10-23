@@ -72,6 +72,10 @@ class LLMProvider(TranslationProvider):
     batch_size = 25                            # smaller than MT services: keeps the JSON reply reliable
     rate_limit_wait = 20                       # default seconds to wait after a rate limit
 
+    @property
+    def variant(self):
+        return getattr(self, "model", "")       # the model is the variant: a new model is a new profile
+
     @abstractmethod
     def _generate(self, system, payload):
         """One call to the model; returns the raw reply text."""

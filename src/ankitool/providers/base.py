@@ -54,6 +54,7 @@ class TranslationProvider(ABC):
     override mask/unmask to protect [sound:...] and {{c1::...}} in another way."""
 
     name = ""                                  # identifier used in --provider
+    variant = ""                                # output-affecting settings (model...); "" if none
     label = ""                                 # display name
     key_env = ""                               # environment variable / .env key name
     default_target = "PT-BR"                   # suggested output language code

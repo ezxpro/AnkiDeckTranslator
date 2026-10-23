@@ -211,6 +211,20 @@ class TranslationCache:
     def count(self):
         return self.conn.execute("SELECT COUNT(*) FROM translations").fetchone()[0]
 
+    def export_rows(self):
+        """One dict per translation (or per text without one). Read-only, for inspection."""
+        rows = self.conn.execute(
+            """SELECT x.content, x.lang, x.lang_source, t.source, t.target,
+                      pr.name, p.variant, t.output, t.created_at
+               FROM texts x
+               LEFT JOIN translations t ON t.text_id = x.id
+               LEFT JOIN profiles p     ON p.id = t.profile_id
+               LEFT JOIN providers pr   ON pr.id = p.provider_id
+               ORDER BY x.content, t.target, pr.name, p.variant""").fetchall()
+        keys = ("text", "detected_lang", "lang_source", "source", "target",
+                "service", "variant", "output", "created_at")
+        return [dict(zip(keys, r)) for r in rows]
+
     def stats(self):
         """{service: {target: number of translations}}"""
         out = {}

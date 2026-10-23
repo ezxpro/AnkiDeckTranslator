@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from ankitool.cache.translation import DEFAULT_MODE, MODES, TranslationCache
 from ankitool.cli.console import Ui
@@ -103,6 +104,19 @@ class CacheApp:
             print(f"Removed {tr} translations.")
         cache.save()
         cache.close()
+
+    def _export(self):
+        o = self.opts
+        if not (self.cache_dir / "cache.sqlite").exists():
+            raise ConfigError(f"No cache file yet in {self.cache_dir}. Translate something first.")
+        path = Path(o.file).expanduser().resolve()
+        if path.exists() and not Ui.auto and not Ui.yes(f"Replace {path.name}?", "n"):
+            raise Cancelled("Cancelled. Nothing was written.")
+        cache = self._cache()
+        rows = cache.export_rows()
+        cache.close()
+        path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Exported {len(rows)} rows to {path}")    
 
     def _select(self):
         if Ui.auto:

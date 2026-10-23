@@ -286,6 +286,15 @@ def parse_args(argv=None):
                                   "Needs a terminal (not -y).",
                       epilog="example:\n  ankitool cache select",
                       formatter_class=WrapHelp)
+    ce = ca_sub.add_parser("export", parents=[common, cdir], help="write the cache to a JSON file",
+                           description="Writes every saved text, its detected language and each saved "
+                                       "translation (service, model, output) to a JSON file, for inspection. "
+                                       "Reads only; no API calls.",
+                           epilog="examples:\n"
+                                  "  ankitool cache export cache.json\n"
+                                  "  ankitool cache export ~/Desktop/cache.json",
+                           formatter_class=WrapHelp)
+    ce.add_argument("file", metavar="FILE", help="JSON file to write (asks before replacing one)")
     ci = ca_sub.add_parser("invalidate", parents=[common, cdir],
                            help="delete saved translations (by service, language or text), or everything",
                            description="Deletes the saved translations and deck names that match ALL the "

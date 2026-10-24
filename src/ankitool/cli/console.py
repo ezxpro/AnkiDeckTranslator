@@ -50,7 +50,7 @@ class ConsoleReporter(Reporter):
         self._last, self._next = {}, {}
         self._live, self._live_t = False, 0.0
 
-        def _end_live(self):
+    def _end_live(self):
         if self._live:                                    # finish the in-place line before a normal one
             print(flush=True)
             self._live = False

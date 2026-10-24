@@ -28,8 +28,8 @@ class AnkiToolApp:
         self.mode = opts.cache_mode or provider_option(self.client.name, "cache") or DEFAULT_MODE
         if self.mode not in MODES:
             raise ConfigError(f"invalid cache mode '{self.mode}' for {self.client.name}. Use: {', '.join(MODES)}")
-        self.cache = TranslationCache(self.cache_dir / "cache.json", self.rep)
-        self.rep.log(f"cache (cache.json): {self.cache.count()} translations, "
+        self.cache = TranslationCache(self.cache_dir / "cache.sqlite", self.rep)
+        self.rep.log(f"cache (cache.sqlite): {self.cache.count()} translations, "
                      f"{len(self.cache.lang)} text languages; mode: {self.mode} for {self.client.name}")
         self.target = None
 

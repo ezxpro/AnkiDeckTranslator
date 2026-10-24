@@ -346,7 +346,7 @@ def parse_args(argv=None):
                                   "  ankitool cache use gemini --reset",
                            formatter_class=WrapHelp)
     cu.add_argument("service", nargs="?", metavar="SERVICE", choices=sorted(PROVIDERS),
-                    help="translation service, e.g. deepl, gemini, groq, openai")
+                    help="translation service, e.g. deepl, azure, gemini, groq, openai")
     cu.add_argument("mode", nargs="?", metavar="MODE", choices=list(MODES),
                     help="shared, provider or isolated (omit to show the current mode)")
     cu.add_argument("--reset", action="store_true", help="remove the saved mode (back to shared)")
@@ -359,7 +359,7 @@ def parse_args(argv=None):
                                    "command-line flag, then environment/.env, then config.json, then the "
                                    "built-in default. With no action it shows the settings.",
                        epilog="keys:\n"
-                              "  provider                       default service (deepl, gemini, groq, openai)\n"
+                              "  provider                       default service (deepl, azure, gemini, groq, openai)\n"
                               "  SERVICE.model                  model name for that service\n"
                               "  SERVICE.base_url               API address (https only, except localhost)\n"
                               "  SERVICE.max_workers            parallel requests (whole number >= 1)\n"

@@ -7,11 +7,12 @@ offers an interactive menu, so no command-line experience is required.
 - **Translate** card fields (and, optionally, deck names) into another language
 - **Reverse** cards — swap what shows on the front and back without editing the text
 - **Inspect** a deck — list note types, fields, and decks without creating any file
-- Works with **DeepL**, **Google Gemini**, **Groq**, **OpenAI** or any OpenAI-compatible API
-  (including **Ollama** locally), plus a free offline `fake` provider for testing
+- Works with **machine-translation** services (**DeepL**, **Azure Translator**) and **LLMs**
+  (**Google Gemini**, **Groq**, **OpenAI** or any OpenAI-compatible API, including **Ollama**
+  locally), plus a free offline `fake` provider for testing
+- **Pick the target language** with the arrow keys, or type its code or name in any case
 - **Caches translations**, so re-running the same deck costs nothing and is instant
 - **Detects languages** automatically, with retries and respects rate limits
-
 ---
 
 ## Requirements
@@ -78,24 +79,26 @@ Settings split into two places: **secrets** and **non-secret preferences**.
 Copy `.env.example` to `.env` next to the script and fill in only the services you use
 (`.env` is git-ignored). Keys can also be ordinary environment variables, which take priority.
 
-| Variable     | Used by           | Description |
-| ------------ | ----------------- | ----------- |
-| `DEEPL_KEY`  | DeepL             | DeepL API key (ends in `:fx`) |
-| `GEMINI_KEY` | Gemini            | Google Gemini key (free tier available) |
-| `GROQ_KEY`   | Groq              | Groq key (free tier available) |
-| `OPENAI_KEY` | OpenAI-compatible | Any OpenAI-compatible service |
+| Variable       | Used by           | Description |
+| -------------- | ----------------- | ----------- |
+| `DEEPL_KEY`    | DeepL             | DeepL API key (ends in `:fx`) |
+| `AZURE_KEY`    | Azure Translator  | Key 1 or Key 2 of the Translator resource (either works) |
+| `AZURE_REGION` | Azure Translator  | Region shown next to the key, e.g. `brazilsouth`. Needed for regional resources; ankitool warns if it is missing |
+| `GEMINI_KEY`   | Gemini            | Google Gemini key (free tier available) |
+| `GROQ_KEY`     | Groq              | Groq key (free tier available) |
+| `OPENAI_KEY`   | OpenAI-compatible | Any OpenAI-compatible service |
 
 Optional overrides (defaults built in; all can also go in `config.json`):
 
-| Variable           | Default                       | Purpose |
-| ------------------ | ----------------------------- | ------- |
-| `ANKITOOL_PROVIDER` | *(asks you)*                  | Service used when `--provider` is not given |
-| `GEMINI_MODEL`     | `gemini-flash-lite-latest`    | Gemini model |
-| `GROQ_MODEL`       | `openai/gpt-oss-20b`          | Groq model |
-| `GROQ_BASE_URL`    | `https://api.groq.com/openai/v1` | Groq endpoint |
-| `OPENAI_MODEL`     | `gpt-4o-mini`                 | OpenAI-compatible model |
-| `OPENAI_BASE_URL`  | `https://api.openai.com/v1`   | e.g. another host, or `http://localhost:11434/v1` (Ollama) |
-
+| Variable            | Default                          | Purpose |
+| ------------------- | -------------------------------- | ------- |
+| `ANKITOOL_PROVIDER` | *(asks you)*                     | Service used when `--provider` is not given |
+| `AZURE_ENDPOINT`    | `https://api.cognitive.microsofttranslator.com` | Another Azure endpoint (https only) |
+| `GEMINI_MODEL`      | `gemini-flash-lite-latest`       | Gemini model |
+| `GROQ_MODEL`        | `openai/gpt-oss-20b`             | Groq model |
+| `GROQ_BASE_URL`     | `https://api.groq.com/openai/v1` | Groq endpoint |
+| `OPENAI_MODEL`      | `gpt-4o-mini`                    | OpenAI-compatible model |
+| `OPENAI_BASE_URL`   | `https://api.openai.com/v1`      | e.g. another host, or `http://localhost:11434/v1` (Ollama) |
 ### Preferences — `config.json`
 
 Non-secret preferences (default provider, model, worker count) live in `config.json`, managed
@@ -115,22 +118,48 @@ built-in default**.
 
 ## Services
 
+Two kinds of service:
+
+- **Machine translation (MT):** DeepL and Azure Translator. Consistent results, billed per character.
+- **LLMs:** Gemini, Groq and OpenAI-compatible APIs (including a local Ollama). Results can differ
+  slightly between runs, and any language can be requested.
+
 Choose a provider with `--provider` (or let it default to the configured one):
 
 ```
 ankitool translate deck.apkg --provider deepl     # needs DEEPL_KEY
+ankitool translate deck.apkg --provider azure     # needs AZURE_KEY and AZURE_REGION
 ankitool translate deck.apkg --provider gemini    # needs GEMINI_KEY (free tier available)
 ankitool translate deck.apkg --provider groq      # needs GROQ_KEY  (free tier available)
 ankitool translate deck.apkg --provider openai    # any OpenAI-compatible API: OPENAI_KEY + OPENAI_BASE_URL
 ```
 
-| Provider | Key env | Extra needed | Notes |
-| -------- | ------- | ------------ | ----- |
-| `deepl`  | `DEEPL_KEY` | `deepl` | Paid; reports character usage |
-| `gemini` | `GEMINI_KEY` | `google-genai` (+ `httpx`) | Google Gemini LLM; free tier; results can vary slightly per run |
-| `groq`   | `GROQ_KEY`  | *(none — plain HTTP)* | Groq LLM; generous free tier |
-| `openai` | `OPENAI_KEY` | *(none — plain HTTP)* | OpenAI-compatible chat API; point `OPENAI_BASE_URL` at Ollama etc. |
-| `fake`   | *(none)*    | *(none)* | No key/network; prefixes the language code. For testing only (use `--provider fake`) |
+| Provider | Kind | Key env | Extra needed | Notes |
+| -------- | ---- | ------- | ------------ | ----- |
+| `deepl`  | MT   | `DEEPL_KEY` | `deepl` | Paid; reports character usage |
+| `azure`  | MT   | `AZURE_KEY` + `AZURE_REGION` | *(none, plain HTTP)* | Free tier F0 (2M characters/month); reports characters sent in the run |
+| `gemini` | LLM  | `GEMINI_KEY` | `google-genai` (+ `httpx`) | Free tier; results can vary slightly per run |
+| `groq`   | LLM  | `GROQ_KEY` | *(none, plain HTTP)* | Generous free tier |
+| `openai` | LLM  | `OPENAI_KEY` | *(none, plain HTTP)* | OpenAI-compatible chat API; point `OPENAI_BASE_URL` at Ollama etc. |
+| `fake`   | test | *(none)* | *(none)* | No key/network; prefixes the language code. For testing only (use `--provider fake`) |
+
+### Azure Translator
+
+Create a **Translator** resource in the Azure portal (the free F0 tier is enough to start) and copy
+a key and the region from *Keys and Endpoint* into `.env`:
+
+```
+AZURE_KEY=your-key-here
+AZURE_REGION=brazilsouth
+```
+
+Key 1 and Key 2 work the same way (two exist so you can rotate one without downtime); use either.
+Regional and multi-service resources need `AZURE_REGION`; only a *global* resource works without
+it, so ankitool prints a warning at startup when it is empty. `[sound:...]` references and cloze
+markers are protected, and large batches are split to stay under Azure's per-request limit.
+`429` rate limits are waited out and retried like with the other services.
+
+### LLMs
 
 Gemini is a language model, so results can differ slightly between runs. The model defaults to
 `gemini-flash-lite-latest`; set `GEMINI_MODEL` to use another one. Free-tier limits are shown in
@@ -140,7 +169,24 @@ errors are waited out and retried automatically.
 The OpenAI-compatible provider also covers **Groq**, **Cerebras**, **OpenRouter**, and a
 **local Ollama** server (e.g. `OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_MODEL=llama3`).
 
+## Choosing the target language
 
+In the interactive mode a **picker** opens: move with the arrow keys (PgUp/PgDn, Home/End), type
+to filter by code or name, Enter to choose, Esc to clear the filter (and, if empty, cancel).
+With `-t` or in a plain terminal you type the **code or the name**, in any case: `PT-BR`,
+`pt-br`, `French`, `portuguese (brazilian)`. The start of a name also works when only one
+language matches (`germ` is German).
+
+| Service | Languages offered |
+| ------- | ----------------- |
+| DeepL | The service's own list |
+| Azure Translator | Azure's own list, fetched at start (a built-in table is used if it cannot be reached) |
+| LLMs | A built-in table of ~186 languages (ISO 639-1) with the variants `PT-BR`/`PT-PT`, `EN-GB`/`EN-US`, `ZH-HANS`/`ZH-HANT`. A bare `pt`, `en` or `zh` means `PT-BR`, `EN-US`, `ZH-HANS` |
+
+An LLM also accepts a language **outside the table** (for example `Klingon`): you are asked to
+confirm (with `-t` or `-y` only a notice is printed) and the name is sent to the model as typed.
+The table only guarantees the language is accepted; quality for rare languages varies. Codes follow
+DeepL's spelling in every service, so cached translations stay compatible between them.
 
 ## Command reference
 
@@ -180,7 +226,7 @@ ankitool translate deck.apkg [options]
 | Flag | Description |
 | ---- | ----------- |
 | `-p, --provider SERVICE` | Translation service |
-| `-t, --target CODE` | Target language, e.g. `PT-BR`, `EN-US` (see `langs`) |
+| `-t, --target CODE` | Target language: code or name, e.g. `PT-BR`, `french` (see `langs` and [Choosing the target language](#choosing-the-target-language)) |
 | `-l, --lang CODES` | Source language(s) to translate, e.g. `IT,EN` or `all` |
 | `-d, --rename-decks none\|main\|all` | Rename deck names too: unchanged / top-level / all |
 | `-m, --deck-method auto\|manual\|review\|keep` | How to rename decks |
@@ -191,7 +237,7 @@ ankitool translate deck.apkg [options]
 | `--min-ratio R` | Min agreement fraction (0–1) to trust detection (default 0.6) |
 | `--cache-mode shared\|provider\|isolated` | Which saved translations are reused (see [Caching](#caching)); default: the service's setting, or `shared` |
 | `--cache-dir FOLDER` | Folder for cache files (default: script folder) |
-| `-o, --output OUT` | Output file |
+| `-o, --output OUT` | Output file. `.apkg` is added when missing (`deck.apkg.bak` → `deck.apkg.bak.apkg`); a repeated `deck.apkg.apkg` becomes `deck.apkg` |
 | `-f, --force` | Overwrite an existing output file |
 | `--keep-scheduling` | Keep study history/deck options (default: removed) |
 | `--no-legacy` | Write the newer, smaller `.apkg` format |
@@ -272,7 +318,9 @@ The mode is saved in `config.json` per service (`providers.SERVICE.cache`). It c
 
 The translate pipeline: **import → detect → translate → (optional) rename → export**.
 
-1. **Import** the `.apkg` using the `anki` library (the only module that imports it).
+1. **Import** the `.apkg` using the `anki` library (the only module that imports it). The log shows
+   how many media files the package has and, while importing, one line rewritten in place once a
+   second, e.g. `Imported 2669 media files of 5729 (46%)` (decks without media show Anki's own text).
 2. **Detect** the language of each field by sampling a few cards; fields already in the target
    language (or whose detection is uncertain) are left untouched, so you never pay to translate
    text that's already correct.
@@ -347,18 +395,13 @@ For any command, whatever is not given as an option is asked for, unless
 ### `ankitool translate -h`
 
 ```
-usage: ankitool translate [-h] [-y] [-q] [-o OUTPUT] [-f] [--keep-scheduling]
-                           [--legacy | --no-legacy] [-p SERVICE] [-t CODE]
-                           [-l CODES] [-d {none,main,all}]
-                           [-m {auto,manual,review,keep}]
-                           [--deck-name CURRENT=NEW] [--cache-mode MODE]
-                           [--dry-run] [--field FIELD] [--skip-field FIELD]
-                           [--sample N] [--min-ratio R] [--cache-dir FOLDER]
-                           [INPUT]
+usage: ankitool translate [-h] [-y] [-q] [-o OUTPUT] [-f] [--keep-scheduling] [--legacy | --no-legacy] [-p SERVICE] [-t CODE] [-l CODES]
+                          [-d {none,main,all}] [-m {auto,manual,review,keep}] [--deck-name CURRENT=NEW] [--cache-mode MODE] [--dry-run]
+                          [--field FIELD] [--skip-field FIELD] [--sample N] [--min-ratio R] [--cache-dir FOLDER]
+                          [INPUT]
 
-Translates the fields of a deck with a translation service (--provider).
-Default output: <input>_out.apkg. With -y: PT-BR, all detected languages, deck
-names unchanged.
+Translates the fields of a deck with a translation service (--provider). Default output: <input>_out.apkg. With -y: PT-BR, all detected
+languages, deck names unchanged.
 
 positional arguments:
   INPUT                 input .apkg file
@@ -366,57 +409,36 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -y, --yes             don't ask anything: use each command's defaults
-  -q, --quiet           only show warnings and the final result (no progress
-                        messages)
-  -o OUTPUT, --output OUTPUT
-                        output .apkg file
-  -f, --force           overwrite the output file if it already exists
-                        (otherwise, with -y, the program stops with an error)
-  --keep-scheduling     keep study history (dates, intervals) and deck options
-                        in the generated file (default: removed)
+  -q, --quiet           only show warnings and the final result (no progress messages)
+  -o, --output OUTPUT   output .apkg file
+  -f, --force           overwrite the output file if it already exists (otherwise, with -y, the program stops with an error)
+  --keep-scheduling     keep study history (dates, intervals) and deck options in the generated file (default: removed)
   --legacy, --no-legacy
-                        legacy .apkg format, accepted by any Anki/AnkiDroid
-                        version (default); --no-legacy writes the newer,
-                        smaller format
-  -p SERVICE, --provider SERVICE
-                        translation service: deepl, fake, gemini, groq, openai
-                        (default: deepl)
-  -t CODE, --target CODE
-                        target language, e.g. PT-BR, EN-US (see the 'langs'
-                        command)
-  -l CODES, --lang CODES
-                        source language(s) to translate, comma-separated (e.g.
-                        IT,EN) or 'all' for all detected ones
-  -d {none,main,all}, --rename-decks {none,main,all}
-                        deck names: none = leave unchanged, main = top-level
-                        decks only, all = top-level and sub-decks
-  -m {auto,manual,review,keep}, --deck-method {auto,manual,review,keep}
-                        how to rename decks: auto (by the service), manual
-                        (you type), review (service suggestion, one by one) or
-                        keep (only --deck-name ones)
+                        legacy .apkg format, accepted by any Anki/AnkiDroid version (default); --no-legacy writes the newer, smaller
+                        format
+  -p, --provider SERVICE
+                        translation service: azure, deepl, fake, gemini, groq, openai (default: deepl)
+  -t, --target CODE     target language, e.g. PT-BR, EN-US (see the 'langs' command)
+  -l, --lang CODES      source language(s) to translate, comma-separated (e.g. IT,EN) or 'all' for all detected ones
+  -d, --rename-decks {none,main,all}
+                        deck names: none = leave unchanged, main = top-level decks only, all = top-level and sub-decks
+  -m, --deck-method {auto,manual,review,keep}
+                        how to rename decks: auto (by the service), manual (you type), review (service suggestion, one by one) or keep
+                        (only --deck-name ones)
   --deck-name CURRENT=NEW
-                        renames the deck named CURRENT (one level, no '::') to
-                        NEW; can be repeated. Without -d/-m, only these are
+                        renames the deck named CURRENT (one level, no '::') to NEW; can be repeated. Without -d/-m, only these are
                         renamed
-  --cache-mode MODE     which saved translations are reused: shared = any
-                        service's (this service's first, then another's);
-                        provider = any model of this service; isolated = only
-                        this service and model. Default: the one set in
-                        config.json (providers.SERVICE.cache), or shared
-  --dry-run             only calculates how many texts and characters would be
-                        translated; does not translate or create a file
-                        (language detection still uses some characters)
-  --field FIELD         translate ONLY this field (or NOTETYPE:FIELD); can be
-                        repeated
-  --skip-field FIELD    do NOT translate this field (or NOTETYPE:FIELD); can
-                        be repeated
-  --sample N            how many texts from each field to use for language
-                        detection (default: 10)
-  --min-ratio R         minimum fraction (0 to 1) of the sample that must
-                        agree on the language for the field to be considered
-                        reliable (default: 0.6)
-  --cache-dir FOLDER    folder for the cache files (default: the script's
-                        folder)
+  --cache-mode MODE     which saved translations are reused: shared = any service's (this service's first, then another's); provider =
+                        any model of this service; isolated = only this service and model. Default: the one set in config.json
+                        (providers.SERVICE.cache), or shared
+  --dry-run             only calculates how many texts and characters would be translated; does not translate or create a file (language
+                        detection still uses some characters)
+  --field FIELD         translate ONLY this field (or NOTETYPE:FIELD); can be repeated
+  --skip-field FIELD    do NOT translate this field (or NOTETYPE:FIELD); can be repeated
+  --sample N            how many texts from each field to use for language detection (default: 10)
+  --min-ratio R         minimum fraction (0 to 1) of the sample that must agree on the language for the field to be considered reliable
+                        (default: 0.6)
+  --cache-dir FOLDER    folder for the cache files (default: the script's folder)
 ```
 
 ### `ankitool reverse -h`
@@ -654,22 +676,18 @@ examples:
 ### `ankitool cache use -h`
 
 ```
-usage: ankitool cache use [-h] [-y] [-q] [--cache-dir FOLDER] [--reset]
-                           [SERVICE] [MODE]
+usage: ankitool cache use [-h] [-y] [-q] [--cache-dir FOLDER] [--reset] [SERVICE] [MODE]
 
-Sets the reuse mode of one service, saved in config.json. Without MODE it
-shows the current one. --reset goes back to shared.
+Sets the reuse mode of one service, saved in config.json. Without MODE it shows the current one. --reset goes back to shared.
 
 positional arguments:
   SERVICE             translation service, e.g. deepl, gemini, groq, openai
-  MODE                shared, provider or isolated (omit to show the current
-                      mode)
+  MODE                shared, provider or isolated (omit to show the current mode)
 
 options:
   -h, --help          show this help message and exit
   -y, --yes           don't ask anything: use each command's defaults
-  -q, --quiet         only show warnings and the final result (no progress
-                      messages)
+  -q, --quiet         only show warnings and the final result (no progress messages)
   --cache-dir FOLDER  folder of cache.sqlite (default: the script's folder)
   --reset             remove the saved mode (back to shared)
 
@@ -736,8 +754,8 @@ examples:
 
 ```
 src/ankitool/
-  core/        errors, constants, paths, progress (Reporter, CancelToken), text helpers   (no I/O to the user)
-  providers/   base.py (contract + registry), deepl.py, gemini.py, openai_compat.py, fake.py
+  core/        errors, constants, paths, progress (Reporter, CancelToken), languages (LLM language table), text helpers   (no I/O to the user)
+  providers/   base.py (contract + registry), deepl.py, azure.py, llm.py (shared LLM base), gemini.py, openai_compat.py, fake.py
   cache/       translation.py: the one cache.sqlite for all services, its modes and views
   anki/        collection.py: the only module that imports the `anki` package
   ops/         translate / rename / reverse / bench: config dataclasses + operations, no print/input

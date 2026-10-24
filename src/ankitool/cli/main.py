@@ -12,7 +12,7 @@ from ankitool.core.errors import AnkiToolError
 
 
 MENU = {"1": ("translate", "Translate a deck",
-              "Changes the language of the card text (e.g. from Italian to Portuguese). Uses DeepL."),
+              "Changes the language of the card text (e.g. from Italian to Portuguese). Uses the translation service you choose."),
         "2": ("reverse", "Swap front and back of cards",
               "What shows on the front moves to the back, and vice versa. The text does not change."),
         "3": ("info", "Inspect a deck",

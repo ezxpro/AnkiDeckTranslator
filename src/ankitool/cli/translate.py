@@ -28,8 +28,8 @@ class AnkiToolApp:
         self.mode = opts.cache_mode or provider_option(self.client.name, "cache") or DEFAULT_MODE
         if self.mode not in MODES:
             raise ConfigError(f"invalid cache mode '{self.mode}' for {self.client.name}. Use: {', '.join(MODES)}")
-        self.cache = TranslationCache(self.cache_dir / "cache.json", self.rep)
-        self.rep.log(f"cache (cache.json): {self.cache.count()} translations, "
+        self.cache = TranslationCache(self.cache_dir / "cache.sqlite", self.rep)
+        self.rep.log(f"cache (cache.sqlite): {self.cache.count()} translations, "
                      f"{len(self.cache.lang)} text languages; mode: {self.mode} for {self.client.name}")
         self.target = None
 
@@ -64,8 +64,10 @@ class AnkiToolApp:
             if mid != cur:
                 print(f"\n{op.anki.model_names[mid]}")
                 cur = mid
-            label = lang if ratio >= op.cfg.min_ratio else f"{lang}? (uncertain)"
-            print(f" {f}: {label} ({ratio:.0%}) e.g.: {ex}")
+            ok = ratio >= op.cfg.min_ratio
+            label = paint(lang, "1;32") if ok else paint(f"{lang}? (uncertain)", "33")
+            pct = dim(f"({ratio:.0%})")
+            print(f" {f}: {label} {pct} e.g.: {dim(ex)}")
 
     def ask_languages(self, op, detected):
         options, already = op.language_options(detected)
@@ -136,7 +138,7 @@ class AnkiToolApp:
             op.apply(chosen)
 
             src_lang = next(iter(picked)) if len(picked) == 1 else None
-            view = CacheView(self.cache, self.client.name, self.mode)
+            view = CacheView(self.cache, self.client.name, self.client.variant, self.mode)
             renamer = DeckRenamer(op.anki, self.client, self.target, view, self.rep)
             DeckRenameCli(renamer, RenameConfig(opts.rename_decks, opts.deck_method,
                                                 opts.deck_names)).run(src_lang)

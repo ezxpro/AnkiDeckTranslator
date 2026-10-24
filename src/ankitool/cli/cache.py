@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from ankitool.cache.translation import DEFAULT_MODE, MODES, TranslationCache
@@ -10,7 +11,8 @@ from ankitool.providers.base import PROVIDERS
 
 MODE_HELP = {
     "shared": "reuse any service's translation when this service has none (the default)",
-    "isolated": "reuse only this service's own translations; others are ignored",
+    "provider": "reuse translations from any model of this service; other services are ignored",
+    "isolated": "reuse only this service and model; everything else is ignored",
 }
 
 
@@ -36,7 +38,7 @@ class CacheApp:
         getattr(self, f"_{self.opts.action or 'show'}")()
 
     def _cache(self):
-        return TranslationCache(self.cache_dir / "cache.json", Reporter())
+        return TranslationCache(self.cache_dir / "cache.sqlite", Reporter())
 
     def _save_mode(self, service, mode=None, reset=False):
         st = get_settings()
@@ -51,13 +53,13 @@ class CacheApp:
 
     def _show(self):
         cache, stats = self._cache(), self._cache().stats()
-        print(f"=== Cache: {self.cache_dir / 'cache.json'} ===")
+        print(f"=== Cache: {self.cache_dir / 'cache.sqlite'} ===")
         print("Mode per service (translate uses it unless --cache-mode is given):")
         for svc in visible_services():
             n = sum(stats.get(svc, {}).values())
             print(f"  {svc:<8} {service_mode(svc):<9} {n} translations stored")
         print(f"Total: {cache.count()} translations, {len(cache.lang)} text languages")
-        print("\nChange it:  ankitool cache use SERVICE shared|isolated")
+        print("\nChange it:  ankitool cache use SERVICE shared|provider|isolated")
         print("Menu:       ankitool cache select      (choose the service and mode from a list)")
 
     def _use(self):
@@ -72,7 +74,7 @@ class CacheApp:
             self._save_mode(o.service, o.mode)
         else:
             print(f"{o.service}: {service_mode(o.service)}  ({MODE_HELP[service_mode(o.service)]})")
-            print(f"Change it: ankitool cache use {o.service} shared|isolated")
+            print(f"Change it: ankitool cache use {o.service} shared|provider|isolated")
             return
         print(f"{o.service}: now {service_mode(o.service) if not o.reset else DEFAULT_MODE} "
               f"({MODE_HELP[DEFAULT_MODE if o.reset else o.mode]})")
@@ -85,27 +87,41 @@ class CacheApp:
             raise ConfigError("invalidate needs a filter (--provider, --target, --lang or --text), "
                               "or --all. Example: ankitool cache invalidate -p gemini")
         if o.all:
-            question = "Delete EVERYTHING in the cache (translations, text languages, deck names)?"
+            question = "Delete all provider translations and detected languages? Manual corrections are kept."
         else:
             parts = [f"{k}={v}" for k, v in (("service", o.provider), ("target", o.target),
-                                              ("language", o.lang), ("text", o.text)) if v]
-            question = f"Delete the translations and deck names matching {', '.join(parts)}?"
+                                             ("language", o.lang), ("text", o.text)) if v]
+            question = f"Delete the translations matching {', '.join(parts)}?"
         if not Ui.auto and not Ui.yes(question, "n"):
             raise Cancelled("Cancelled. Nothing was deleted.")
         cache = self._cache()
         if o.all:
-            tr, lang, dk = cache.clear_all()
-            print(f"Removed {tr} translations, {lang} text languages and {dk} deck names.")
+            tr, lang = cache.clear_all()
+            print(f"Removed {tr} translations and {lang} text languages. Manual corrections were kept.")
         else:
-            tr, dk = cache.invalidate(service=o.provider, target=o.target.upper() if o.target else None,
-                                      lang=o.lang.upper() if o.lang else None, text=o.text)
-            print(f"Removed {tr} translations and {dk} deck names.")
+            tr = cache.invalidate(service=o.provider, target=o.target.upper() if o.target else None,
+                                  lang=o.lang.upper() if o.lang else None, text=o.text)
+            print(f"Removed {tr} translations.")
         cache.save()
+        cache.close()
+
+    def _export(self):
+        o = self.opts
+        if not (self.cache_dir / "cache.sqlite").exists():
+            raise ConfigError(f"No cache file yet in {self.cache_dir}. Translate something first.")
+        path = Path(o.file).expanduser().resolve()
+        if path.exists() and not Ui.auto and not Ui.yes(f"Replace {path.name}?", "n"):
+            raise Cancelled("Cancelled. Nothing was written.")
+        cache = self._cache()
+        rows = cache.export_rows()
+        cache.close()
+        path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Exported {len(rows)} rows to {path}")
 
     def _select(self):
         if Ui.auto:
             raise ConfigError("'cache select' needs an interactive terminal. "
-                              "Without one, use: ankitool cache use SERVICE shared|isolated")
+                              "Without one, use: ankitool cache use SERVICE shared|provider|isolated")
         services = visible_services()
         choices = {str(i): (n, f"currently: {service_mode(n)}") for i, n in enumerate(services, 1)}
         choices["0"] = ("Back", "Change nothing.")

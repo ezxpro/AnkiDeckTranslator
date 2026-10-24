@@ -50,10 +50,11 @@ class TranslationProvider(ABC):
          (and, if available, usage and detect);
       3. decorate the class with @register_provider.
     It then works with --provider and in the interactive menu, with its own cache
-    in the shared cache.json, under its name. If the service does not understand HTML with translate="no",
+    in the shared cache.sqlite, under its name. If the service does not understand HTML with translate="no",
     override mask/unmask to protect [sound:...] and {{c1::...}} in another way."""
 
     name = ""                                  # identifier used in --provider
+    variant = ""                                # output-affecting settings (model...); "" if none
     label = ""                                 # display name
     key_env = ""                               # environment variable / .env key name
     default_target = "PT-BR"                   # suggested output language code

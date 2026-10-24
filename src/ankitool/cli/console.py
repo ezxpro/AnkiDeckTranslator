@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import os
 import re
@@ -23,6 +24,18 @@ def _paint(text, code, on):
 
 def _color_on(stream):
     return stream.isatty() and not os.environ.get("NO_COLOR")
+
+
+def paint(text, code):
+    """ANSI colour; off when output is redirected or NO_COLOR is set."""
+    if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
+        return f"\033[{code}m{text}\033[0m"
+    return str(text)
+
+def head(t): return paint(t, "1;36")          # titles: bold cyan
+def num(t): return paint(t, "1;33")           # option numbers: bold yellow
+def dim(t): return paint(t, "2")              # help text: dim
+def idx(i): return num(f"{i:>3})")            # "  1)"
 
 
 class ConsoleReporter(Reporter):
@@ -141,26 +154,20 @@ class Ui:
         n = len(labels)
         if Ui.auto:
             return list(range(n)) if default == "all" else [0] if default == "first" else None
-        print(f"\n{title}")
+        #print(f"\n{title}")
+        print(f"\n{head(title)}")
         if intro:
-            print(intro)
+            print(dim(intro))
         print()
         for i, lab in enumerate(labels, 1):
-            print(f"  {i:>3}) {lab}")
+            print(f"{idx(i)} {lab}")
         if cancel:
-            print("    0) Cancel (do nothing)")
-        print()
-        if multi:
-            print("How to choose: type the item number and press Enter.")
-            print("To choose several, separate them with commas (e.g. 1,3) or use a range (e.g. 2-5).")
-        else:
-            print("How to choose: type the item number and press Enter.")
+            print(f"{num('  0)')} {dim('Cancel')}")
+        tip = "Type a number" + (", several (1,3) or a range (2-5)" if multi else "")
+        tip += {"all": ". Enter = all.", "first": ". Enter = item 1."}.get(default, ".")
+        print("\n" + dim(tip))
         if hint:
-            print(hint)
-        if default == "all":
-            print("If you just press Enter, I'll choose ALL items.")
-        elif default == "first":
-            print("If you just press Enter, I'll choose item 1.")
+            print(dim(hint))
         while True:
             raw = input("Your choice: ").strip().strip('"')
             if raw == "":
@@ -218,7 +225,133 @@ def default_start():
         return cwd
     return SCRIPT_DIR
 
+def read_key():
+    """One key press: 'up','down','left','right','pgup','pgdn','home','end','enter','esc',
+    'backspace', or the typed character."""
+    if os.name == "nt":
+        import msvcrt
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):                      # arrow/function keys come as two characters
+            return {"H": "up", "P": "down", "K": "left", "M": "right", "I": "pgup",
+                    "Q": "pgdn", "G": "home", "O": "end"}.get(msvcrt.getwch(), "")
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return {"\r": "enter", "\x1b": "esc", "\x08": "backspace"}.get(ch, ch)
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = os.read(fd, 1).decode(errors="ignore")
+        if ch == "\x1b":
+            seq = ""
+            while select.select([fd], [], [], 0.05)[0]:
+                seq += os.read(fd, 1).decode(errors="ignore")
+            return {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "[5~": "pgup",
+                    "[6~": "pgdn", "[H": "home", "[F": "end", "[1~": "home", "[4~": "end",
+                    "OH": "home", "OF": "end"}.get(seq, "esc")
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return {"\r": "enter", "\n": "enter", "\x7f": "backspace"}.get(ch, ch)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _entries(cur, suffix):
+    """[(label, path, is_dir)]: '..' first, then folders, then files with the given suffix."""
+    items = []
+    if cur.parent != cur:
+        items.append(("..", cur.parent, True))
+    try:
+        found = sorted(cur.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return items
+    for p in found:
+        try:
+            if p.is_dir() and not p.name.startswith("."):
+                items.append((p.name + "/", p, True))
+            elif p.is_file() and p.suffix.lower() == suffix:
+                items.append((p.name, p, False))
+        except OSError:
+            continue
+    return items
+
+
 def pick_file(start=None, suffix=".apkg"):
+    """File browser driven by the keyboard: Up/Down move, Enter opens a folder or chooses a file.
+    Returns the chosen Path, or None if cancelled."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return _pick_file_numbered(start, suffix)       # no keyboard control: numbered list
+    os.system("")                                       # enables ANSI codes on old Windows consoles
+    cur = Path(start or Path.cwd()).resolve()
+    pos, focus = 0, None
+    while True:
+        items = _entries(cur, suffix)
+        if focus is not None:                           # came back up: select the folder we left
+            pos = next((i for i, it in enumerate(items) if it[1] == focus), 0)
+            focus = None
+        pos = max(0, min(pos, len(items) - 1))
+        rows = max(5, shutil.get_terminal_size().lines - 6)
+        top = max(0, min(pos - rows // 2, len(items) - rows))
+        out = ["\033[2J\033[H" + head(f"=== Choose a {suffix} file ==="), dim(str(cur)), ""]
+        for i in range(top, min(top + rows, len(items))):
+            label, p, is_dir = items[i]
+            if is_dir:
+                text = paint(label, "36")
+            else:
+                try:
+                    text = f"{label}  {dim(f'({p.stat().st_size / 1e6:.1f} MB)')}"
+                except OSError:
+                    text = label
+            out.append(f" {num('>')} \033[7m {text} \033[0m" if i == pos else f"     {text}")
+        if len(items) <= 1:
+            out.append(dim(f"     (no folders or {suffix} files here)"))
+        out += ["", dim(f"{pos + 1}/{len(items)}   Up/Down move   Enter open/choose   "
+                        f"Left/Backspace up   p paste path   Esc cancel")]
+        print("\n".join(out), end="", flush=True)
+
+        key = read_key()
+        if key == "up":
+            pos -= 1
+        elif key == "down":
+            pos += 1
+        elif key == "pgup":
+            pos -= rows
+        elif key == "pgdn":
+            pos += rows
+        elif key == "home":
+            pos = 0
+        elif key == "end":
+            pos = len(items) - 1
+        elif key in ("enter", "right") and items:
+            _, p, is_dir = items[pos]
+            if is_dir:
+                focus = cur if p == cur.parent else None
+                cur, pos = p, 0
+            elif key == "enter":
+                print()
+                return p
+        elif key in ("left", "backspace") and cur.parent != cur:
+            focus, cur = cur, cur.parent
+        elif key in ("esc", "q"):
+            print()
+            return None
+        elif key in ("p", "/"):
+            raw = input("\n\nPath of a folder or file: ").strip().strip('"').strip("'")
+            p = Path(raw).expanduser() if raw else None
+            if p is not None and not p.is_absolute():
+                p = cur / p
+            try:
+                if p is not None and p.resolve().is_dir():
+                    cur, pos = p.resolve(), 0
+                elif p is not None and p.resolve().is_file() and p.suffix.lower() == suffix:
+                    return p.resolve()
+            except OSError:
+                pass
+
+def _pick_file_numbered(start=None, suffix=".apkg"):
     """Terminal file browser. Shows the folders and .apkg files of the current folder.
     Returns the Path of the chosen file, or None if the person cancelled."""
     cur = Path(start or Path.cwd()).resolve()

@@ -22,11 +22,19 @@ class AnkiCollection:
         self.model_names = {}                                  # mid -> note type name
         self.field_values = collections.defaultdict(list)      # (mid, field) -> values with text
 
+    def _anki_progress(self):
+        """Anki's own progress text during import/export, or '' if this Anki version doesn't expose it."""
+        try:
+            p = self.col._backend.latest_progress()
+            return next((getattr(p, k) for k in ("importing", "exporting") if p.HasField(k)), "")
+        except Exception:
+            return ""
+
     def import_package(self):
         self.rep.log(f"importing {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
         self.tmp_dir = Path(tempfile.mkdtemp())
         self.col = Collection(str(self.tmp_dir / "collection.anki2"))
-        with Heartbeat(self.rep, "importing deck"):
+        with Heartbeat(self.rep, "importing deck", status=self._anki_progress):
             self.col.import_anki_package(ImportAnkiPackageRequest(
                 package_path=str(self.src), options=ImportAnkiPackageOptions(
                     with_scheduling=self.keep_scheduling,
@@ -34,6 +42,7 @@ class AnkiCollection:
             
     def load_notes(self):
         nids = self.col.find_notes("")
+        self.rep.log(f"reading {len(nids)} notes...")
         get_notes = getattr(self.col, "get_notes", None)      # batch read in newer anki versions
         notes = get_notes(nids) if get_notes else [self.col.get_note(i) for i in nids]
         for n in track(self.rep, notes, "loading notes"):
@@ -88,7 +97,7 @@ class AnkiCollection:
         return len(self.col.find_notes(f"mid:{mid}"))
 
     def export(self, out_path):
-        with Heartbeat(self.rep, "exporting"):
+        with Heartbeat(self.rep, "exporting", status=self._anki_progress):
             self.col.export_anki_package(out_path=str(out_path), options=ExportAnkiPackageOptions(
                 with_scheduling=self.keep_scheduling, with_deck_configs=self.keep_scheduling,
                 with_media=True, legacy=self.legacy),

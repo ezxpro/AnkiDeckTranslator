@@ -1,5 +1,7 @@
 # Translation cache (contains your card content)
 cache*.json
+cache*.sqlite
+cache*.sqlite-journal
 deck_cache*.json
 *.tmp
 *.bak

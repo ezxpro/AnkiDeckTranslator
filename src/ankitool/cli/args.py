@@ -38,6 +38,8 @@ def colorize(text):
             line = style(line, "1;36")
         else:
             line = re.sub(r"(?<![\w/])(-{1,2}[A-Za-z][\w-]*)", lambda m: style(m.group(1), "32"), line)
+            if line.lstrip().startswith("ankitool"):
+                line = line.replace("ankitool", style("ankitool", "1;33"), 1)
         out.append(line)
     return "\n".join(out) + "\n"
 
@@ -178,7 +180,7 @@ def parse_args(argv=None):
                         "can be repeated. Without -d/-m, only these are renamed")
     t.add_argument("--cache-mode", choices=list(MODES), metavar="MODE",
                    help="which saved translations are reused: shared = any service's (this service's "
-                        "first, then another's); isolated = only this service's. Default: the one set "
+                        "first, then another's); provider = any model of this service; isolated = only this service and model. Default: the one set "
                         "in config.json (providers.SERVICE.cache), or shared"),
     t.add_argument("--dry-run", action="store_true",
                    help="only calculates how many texts and characters would be translated; "
@@ -260,12 +262,12 @@ def parse_args(argv=None):
 
     cdir = FriendlyParser(add_help=False)
     cdir.add_argument("--cache-dir", metavar="FOLDER",
-                      help="folder of cache.json (default: the script's folder)")
+                      help="folder of cache.sqlite (default: the script's folder)")
     ca = sub.add_parser("cache", parents=[common, cdir],
                         help="translation cache: which saved translations each service reuses",
                         description="Shows or changes how each service reuses the translations already in "
-                                    "cache.json. shared (default) = reuse any service's translation when "
-                                    "its own is missing; isolated = only its own. Set per service, "
+                                    "cache.sqlite. shared (default) = reuse any service's translation when "
+                                    "its own is missing; provider = any model of its own service only; isolated = only its exact service and model. Set per service, "
                                     "or per run with translate --cache-mode.",
                         epilog="examples:\n"
                                "  ankitool cache                       show each service's mode\n"
@@ -286,9 +288,18 @@ def parse_args(argv=None):
                                   "Needs a terminal (not -y).",
                       epilog="example:\n  ankitool cache select",
                       formatter_class=WrapHelp)
+    ce = ca_sub.add_parser("export", parents=[common, cdir], help="write the cache to a JSON file",
+                           description="Writes every saved text, its detected language and each saved "
+                                       "translation (service, model, output) to a JSON file, for inspection. "
+                                       "Reads only; no API calls.",
+                           epilog="examples:\n"
+                                  "  ankitool cache export cache.json\n"
+                                  "  ankitool cache export ~/Desktop/cache.json",
+                           formatter_class=WrapHelp)
+    ce.add_argument("file", metavar="FILE", help="JSON file to write (asks before replacing one)")
     ci = ca_sub.add_parser("invalidate", parents=[common, cdir],
                            help="delete saved translations (by service, language or text), or everything",
-                           description="Deletes the saved translations and deck names that match ALL the "
+                           description="Deletes the saved translations that match ALL the "
                                        "filters given. Text languages are kept. Asks first unless -y. "
                                        "Texts deleted this way are sent to the service again next time.",
                            epilog="examples:\n"
@@ -303,9 +314,9 @@ def parse_args(argv=None):
     ci.add_argument("--lang", metavar="CODE", help="only this source language, e.g. IT")
     ci.add_argument("--text", metavar="TEXT", help="only this original text")
     ci.add_argument("--all", action="store_true",
-                    help="delete everything: translations, text languages and deck names")
+                    help="delete all translations and text languages (manual corrections are kept)")
     cu = ca_sub.add_parser("use", parents=[common, cdir],
-                           help="set (or show) one service's mode: shared or isolated",
+                           help="set (or show) one service's mode: shared, provider or isolated",
                            description="Sets the reuse mode of one service, saved in config.json. "
                                        "Without MODE it shows the current one. --reset goes back to shared.",
                            epilog="examples:\n"
@@ -316,7 +327,7 @@ def parse_args(argv=None):
     cu.add_argument("service", nargs="?", metavar="SERVICE", choices=sorted(PROVIDERS),
                     help="translation service, e.g. deepl, gemini, groq, openai")
     cu.add_argument("mode", nargs="?", metavar="MODE", choices=list(MODES),
-                    help="shared or isolated (omit to show the current mode)")
+                    help="shared, provider or isolated (omit to show the current mode)")
     cu.add_argument("--reset", action="store_true", help="remove the saved mode (back to shared)")
 
     c = sub.add_parser("config", parents=[common],
@@ -331,7 +342,7 @@ def parse_args(argv=None):
                               "  SERVICE.model                  model name for that service\n"
                               "  SERVICE.base_url               API address (https only, except localhost)\n"
                               "  SERVICE.max_workers            parallel requests (whole number >= 1)\n"
-                              "  SERVICE.cache                  cache mode: shared or isolated\n"
+                              "  SERVICE.cache                  cache mode: shared, provider or isolated\n"
                               "examples:\n"
                               "  ankitool config show\n"
                               "  ankitool config set provider groq\n"

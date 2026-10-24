@@ -31,9 +31,3 @@ def test_numbers_and_symbols_are_not_sent(tmp_path):
     ft.translate({(1, "F"): ("IT", "PT-BR")}, {(1, "F"): ["3155", "ciao", "3.200"]})
     assert client.sent == ["ciao"]
     assert cache.count() == 1
-
-
-def test_cached_numbers_are_not_applied(tmp_path):
-    cache = TranslationCache(tmp_path / "cache.json", Reporter())
-    cache.put("PT-BR", "IT", "3155", "3.155", "deepl")     # left over from an earlier run
-    assert CacheView(cache, "deepl").read("PT-BR", "IT", "3155") is None

@@ -1,5 +1,5 @@
-from pathlib import Path
 import json
+from pathlib import Path
 
 from ankitool.cache.translation import DEFAULT_MODE, MODES, TranslationCache
 from ankitool.cli.console import Ui
@@ -116,12 +116,12 @@ class CacheApp:
         rows = cache.export_rows()
         cache.close()
         path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"Exported {len(rows)} rows to {path}")    
+        print(f"Exported {len(rows)} rows to {path}")
 
     def _select(self):
         if Ui.auto:
             raise ConfigError("'cache select' needs an interactive terminal. "
-                              "Without one, use: ankitool cache use SERVICE shared|isolated")
+                              "Without one, use: ankitool cache use SERVICE shared|provider|isolated")
         services = visible_services()
         choices = {str(i): (n, f"currently: {service_mode(n)}") for i, n in enumerate(services, 1)}
         choices["0"] = ("Back", "Change nothing.")

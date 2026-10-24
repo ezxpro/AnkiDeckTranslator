@@ -34,6 +34,16 @@ class AnkiToolApp:
                      f"{len(self.cache.lang)} text languages; mode: {self.mode} for {self.client.name}")
         self.target = None
 
+    def _accept_target(self, target):
+        """False if the user declines a language that is not in the service's list (LLMs take any name)."""
+        if target in self.client.target_codes:
+            return True
+        msg = f"'{target}' is not in the service's list; the model will translate into it as typed."
+        if Ui.auto or self.opts.target:
+            print(f"  {msg}")
+            return True
+        return Ui.yes(f"  {msg} Continue?", "n")
+
     # ---- questions ----
     def ask_target(self):
         if self.opts.target:
@@ -41,6 +51,7 @@ class AnkiToolApp:
             if not target:
                 raise ConfigError(f"Invalid target language: {self.opts.target}. "
                                   f"Use the 'langs' command to see the codes.")
+            self._accept_target(target)
         else:
             if not Ui.auto:
                 Ui.show_langs("Languages you can translate into (code and name):",
@@ -51,9 +62,10 @@ class AnkiToolApp:
             while True:
                 raw = Ui.ask("Target language", self.client.default_target)
                 target = self.client.resolve_target(raw)
-                if target:
+                if target and self._accept_target(target):
                     break
-                print(f"  '{raw}' is not a code in the list. Type one of the codes shown above.")
+                if not target:
+                    print(f"  '{raw}' is not a valid language. Type a code from the list above or a language name.")
         self.target = target
 
     def show_detected(self, op, detected):

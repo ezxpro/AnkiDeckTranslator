@@ -4,23 +4,14 @@ import re
 import time
 
 from ankitool.core.errors import ConfigError
+from ankitool.core.languages import NAMES, TARGETS, free_text, lookup
 from ankitool.core.text import lang_base
 from ankitool.providers.base import Language, TranslationProvider, TranslationResult, load_secret
 
-# Gemini has no "list languages" endpoint, so the list is static. Codes follow DeepL's
-# spelling (PT-BR, EN-US, ...) so caches and the --target option behave the same way.
-TARGETS = (
-    ("AR", "Arabic"), ("BG", "Bulgarian"), ("CS", "Czech"), ("DA", "Danish"), ("DE", "German"),
-    ("EL", "Greek"), ("EN-GB", "English (British)"), ("EN-US", "English (American)"),
-    ("ES", "Spanish"), ("ET", "Estonian"), ("FI", "Finnish"), ("FR", "French"), ("HE", "Hebrew"),
-    ("HI", "Hindi"), ("HU", "Hungarian"), ("ID", "Indonesian"), ("IT", "Italian"),
-    ("JA", "Japanese"), ("KO", "Korean"), ("LT", "Lithuanian"), ("LV", "Latvian"),
-    ("NB", "Norwegian (Bokmål)"), ("NL", "Dutch"), ("PL", "Polish"),
-    ("PT-BR", "Portuguese (Brazilian)"), ("PT-PT", "Portuguese (European)"), ("RO", "Romanian"),
-    ("RU", "Russian"), ("SK", "Slovak"), ("SL", "Slovenian"), ("SV", "Swedish"), ("TH", "Thai"),
-    ("TR", "Turkish"), ("UK", "Ukrainian"), ("VI", "Vietnamese"),
-    ("ZH-HANS", "Chinese (Simplified)"), ("ZH-HANT", "Chinese (Traditional)"),
-)
+def fetch_source_languages(self):
+    # Sources are reported as base codes ("PT", not "PT-BR"), which is what detect() returns.
+    names = {lang_base(code): NAMES.get(lang_base(code)) or name for code, name in TARGETS}
+    return [Language(code, name) for code, name in sorted(names.items())]
 
 TRANSLATE_PROMPT = """You are a translation engine for flashcard (Anki) text.
 Translate the "text" of each input item into {target}.{source}
@@ -96,6 +87,10 @@ class LLMProvider(TranslationProvider):
             if c.upper() == (code or "").upper():
                 return name
         return self.source_names.get(lang_base(code), code)
+
+    def resolve_target(self, raw):
+        """The table (code or name) first; otherwise any language name, which the model is asked to use as typed."""
+        return super().resolve_target(raw) or lookup(raw) or free_text(raw)
 
     # ---- reply handling ----
     @staticmethod

@@ -691,8 +691,12 @@ def ask_paths(opts, suffix="_out"):
     if not out.is_absolute() and out.parent == Path("."):
         out = src.parent / out                            # simple name: saved next to the original
     out = out.resolve()
-    if out.suffix.lower() != ".apkg":
-        out = out.with_name(out.name + ".apkg")
+    name = out.name.rstrip(". ")                          # Windows silently drops trailing dots/spaces
+    while name.lower().endswith(".apkg.apkg"):            # typed twice: keep one
+        name = name[:-5]
+    if not name.lower().endswith(".apkg"):                # also "deck.apkg.bak" -> "deck.apkg.bak.apkg"
+        name += ".apkg"
+    out = out.with_name(name)
     if out == src:
         raise ConfigError("The new file cannot have the same name as the original.")
     if out.exists() and not opts.force:

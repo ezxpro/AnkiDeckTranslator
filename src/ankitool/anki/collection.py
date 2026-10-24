@@ -2,10 +2,12 @@ from pathlib import Path
 import collections
 import tempfile
 import shutil
+import zipfile
 from anki.collection import (Collection, ImportAnkiPackageRequest,
                              ImportAnkiPackageOptions, ExportAnkiPackageOptions)
 
-from ankitool.core.progress import Heartbeat, Reporter, track
+
+from ankitool.core.progress import Heartbeat, Reporter, format_import_progress, track
 from ankitool.core.text import TextTools
 
 
@@ -30,11 +32,22 @@ class AnkiCollection:
         except Exception:
             return ""
 
+    def _media_total(self):
+        """Media files inside the .apkg (zip entries named with a number); 0 if it cannot be read."""
+        try:
+            with zipfile.ZipFile(self.src) as z:
+                return sum(1 for n in z.namelist() if n.isdigit())
+        except (OSError, zipfile.BadZipFile):
+            return 0
+
     def import_package(self):
-        self.rep.log(f"importing {self.src} ({self.src.stat().st_size / 1e6:.1f} MB)")
+        total = self._media_total()
+        self.rep.log(f"importing {self.src} ({self.src.stat().st_size / 1e6:.1f} MB"
+                     + (f", {total} media files)" if total else ")"))
         self.tmp_dir = Path(tempfile.mkdtemp())
         self.col = Collection(str(self.tmp_dir / "collection.anki2"))
-        with Heartbeat(self.rep, "importing deck", status=self._anki_progress):
+        with Heartbeat(self.rep, "importing deck",
+                       status=lambda: format_import_progress(self._anki_progress(), total)):
             self.col.import_anki_package(ImportAnkiPackageRequest(
                 package_path=str(self.src), options=ImportAnkiPackageOptions(
                     with_scheduling=self.keep_scheduling,

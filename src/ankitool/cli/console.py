@@ -37,19 +37,44 @@ def num(t): return paint(t, "1;33")           # option numbers: bold yellow
 def dim(t): return paint(t, "2")              # help text: dim
 def idx(i): return num(f"{i:>3})")            # "  1)"
 
+_NUM = re.compile(r"(?<![\w.])\d[\d.,]*(?:%|s\b|\s?MB\b)?(?!\w)")
+
+def _highlight(text):
+    """Numbers (sizes, counts, seconds, percentages) in bold yellow."""
+    return _NUM.sub(lambda m: num(m.group()), str(text))
 
 class ConsoleReporter(Reporter):
     def __init__(self, quiet=False, cancel=None):
         super().__init__(cancel)
         self.quiet = quiet
         self._last, self._next = {}, {}
+        self._live, self._live_t = False, 0.0
+
+        def _end_live(self):
+        if self._live:                                    # finish the in-place line before a normal one
+            print(flush=True)
+            self._live = False
+
+    def live(self, *a):
+        """Progress of one long step: rewritten in place on a terminal, a line every 3 s otherwise."""
+        if self.quiet:
+            return
+        if sys.stdout.isatty():
+            print(f"\r\033[K{dim(time.strftime('%H:%M:%S'))} {_highlight(' '.join(map(str, a)))}", end="", flush=True)
+            self._live = True
+        elif time.time() - self._live_t >= 3:
+            self._live_t = time.time()
+            self.log(*a)
 
     def log(self, *a):
+        self._end_live()
         if not self.quiet:
-            print(time.strftime("%H:%M:%S"), *a, flush=True)
+            print(dim(time.strftime("%H:%M:%S")), _highlight(" ".join(map(str, a))), flush=True)
 
     def warn(self, *a):                                   # shown even with --quiet
-        print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
+        self._end_live()
+        print(dim(time.strftime("%H:%M:%S")), _paint(" ".join(map(str, a)), "33", _color_on(sys.stderr)),
+              file=sys.stderr, flush=True)
 
     def advance(self, label, done, total):
         if self.quiet or not total:
@@ -57,7 +82,7 @@ class ConsoleReporter(Reporter):
         if sys.stdout.isatty():
             now = time.time()
             if now - self._last.get(label, 0.0) >= 0.2 or done == total:
-                print(f"\r{time.strftime('%H:%M:%S')} {label}: {done}/{total} "
+                print(f"\r{dim(time.strftime('%H:%M:%S'))} {label}: {num(f'{done}/{total}')} "
                       f"({done * 100 // total}%)", end="", flush=True)
                 self._last[label] = now
             if done == total:
@@ -86,15 +111,15 @@ class Ui:
     def ask(msg, default):
         if Ui.auto:
             return default
-        return input(f"{msg} [{default}]: ").strip().strip('"') or default
+        return input(f"{head(msg)} {dim(f'[{default}]')}: ").strip().strip('"') or default
 
     @staticmethod
-    def yes(msg, default="n"):
-        """Yes/no question. Only accepts y/n (or variations); Enter uses the default."""
+    def yes(msg, default="n", labels=("Yes", "No")):
+        """Yes/no question (arrow-key menu with `labels`; typed y/n in a plain terminal). Enter = default."""
         if Ui.auto:
             return default.lower() in YES_WORDS
         if _interactive():
-            idx = menu(msg, ["Yes", "No"], pos=0 if default.lower() in YES_WORDS else 1,
+            idx = menu(msg, list(labels), pos=0 if default.lower() in YES_WORDS else 1,
                        hotkeys={"y": 0, "s": 0, "n": 1}, tones=["32", "31"])
             return idx == 0
         label = "yes" if default.lower() in YES_WORDS else "no"
@@ -220,14 +245,13 @@ class Ui:
     def show_langs(title, langs):
         items = sorted(langs, key=lambda l: l.name)
         half = (len(items) + 1) // 2
-        print(f"\n{title}")
+        print(f"\n{head(title)}")
         for i in range(half):
-            left = f" {items[i].code:<8}{items[i].name}"
-            right = ""
+            line = f" {paint(items[i].code.ljust(8), '33')}{items[i].name}"
             if i + half < len(items):
                 r = items[i + half]
-                right = f"{r.code:<8}{r.name}"
-            print(f"{left:<40}{right}")
+                line += " " * max(1, 39 - 8 - len(items[i].name)) + f"{paint(r.code.ljust(8), '33')}{r.name}"
+            print(line)
         print()
 
 def default_start():
@@ -385,6 +409,69 @@ def pager(text):
         sys.stdout.write("\033[?25h\033[?1007l\033[?1049l")
         sys.stdout.flush()
 
+def pick_language(title, langs, default=None):
+    """Keyboard language picker. Up/Down/PgUp/PgDn/Home/End move; typing filters by code or name
+    (any case); Enter chooses (with no match, the typed text is returned as is); Esc clears the
+    filter, then cancels. Returns the code (or the typed text); None without an interactive terminal."""
+    if not _interactive():
+        return None
+    os.system("")                                       # enables ANSI codes on old Windows consoles
+    items = sorted(langs, key=lambda l: l.name)
+    query, drawn = "", 0
+    pos = next((i for i, l in enumerate(items) if l.code == default), 0)
+    while True:
+        q = query.strip().lower()
+        shown = [l for l in items if q in l.code.lower() or q in l.name.lower()] if q else items
+        n = len(shown)
+        pos = max(0, min(pos, n - 1))
+        rows = max(5, min(12, shutil.get_terminal_size().lines - 7))
+        top = max(0, min(pos - rows // 2, n - rows))
+        lines = [head(title),
+                 dim("Type to filter (code or name)   Up/Down PgUp/PgDn move   Enter choose   Esc cancel"),
+                 f"{num('Search:')} {paint(query, '1;36')}{dim('_')}"]
+        for i in range(top, min(top + rows, n)):
+            l = shown[i]
+            lines.append(f" {num('>')} " + paint(f" {l.code:<8} {l.name} ", "7;36") if i == pos
+                         else f"   {paint(f' {l.code:<8}', '33')} {l.name}")
+        if not n:
+            lines.append(dim(f"   no match: Enter uses '{query.strip()}' as the language name"))
+        lines.append(dim(f"{pos + 1 if n else 0}/{n}"))
+        text = "\n".join(lines)
+        print((f"\033[{drawn}A\033[J" if drawn else "") + text, flush=True)
+        drawn = _rows(text)
+
+        key = read_key()
+        if key == "up" and n:
+            pos = (pos - 1) % n
+        elif key == "down" and n:
+            pos = (pos + 1) % n
+        elif key == "pgup":
+            pos = max(0, pos - rows)
+        elif key == "pgdn":
+            pos = min(n - 1, pos + rows)
+        elif key == "home":
+            pos = 0
+        elif key == "end":
+            pos = n - 1
+        elif key == "enter":
+            if n:
+                choice, label = shown[pos].code, f"{shown[pos].code} - {shown[pos].name}"
+            elif query.strip():
+                choice = label = query.strip()
+            else:
+                continue
+            print(f"\033[{drawn}A\033[J" + head(title) + dim("  ->  ") + label, flush=True)
+            return choice
+        elif key == "esc":
+            if query:
+                query, pos = "", 0
+            else:
+                print(f"\033[{drawn}A\033[J", end="", flush=True)
+                raise Cancelled("Cancelled.")
+        elif key == "backspace":
+            query, pos = query[:-1], 0
+        elif len(key) == 1 and key.isprintable():
+            query, pos = query + key, 0
 
 def _entries(cur, suffix):
     """[(label, path, is_dir)]: '..' first, then folders, then files with the given suffix."""
@@ -598,9 +685,8 @@ def ask_paths(opts, suffix="_out"):
         if Ui.auto:
             name = default
         else:
-            print("\nNow choose the name of the NEW file I'll create. The original file is not changed.")
-            print(f"It will be saved in the same folder as the original: {src.parent}")
-            name = Ui.ask("Name of the new file (just Enter = use the suggested name)", default)
+            print(dim(f"\nThe original is not changed. The new file goes in {src.parent}"))
+            name = Ui.ask("New file name", default)
         out = Path(name).expanduser()
     if not out.is_absolute() and out.parent == Path("."):
         out = src.parent / out                            # simple name: saved next to the original

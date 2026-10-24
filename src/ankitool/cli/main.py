@@ -28,14 +28,17 @@ MENU = {"1": ("translate", "Translate a deck",
 # Menu entries that need extra positional args beyond their command name.
 MENU_ARGV = {"config": ["config", "show"], "cache": ["cache", "select"]}
 
-BACK_TO_MENU = "\nDo you want to do anything else?\n  (y = back to the main menu, n = quit the program)"
+BACK_TO_MENU = "Do you want to do anything else?"
+
+def _more():
+    return Ui.yes(BACK_TO_MENU, "y", ("Back to the main menu", "Quit"))
 
 def _failed(text, from_menu):
     """Shows the error. Returns True if it should go back to the menu; outside the menu, exits with code 1."""
     print(f"\n{text}", file=sys.stdout if from_menu else sys.stderr)
     if not from_menu:
         sys.exit(1)
-    return not Ui.auto and Ui.yes(BACK_TO_MENU, "y")
+    return not Ui.auto and _more()
 
 def main(argv=None):
     from_menu = False                                    # only those who started from the menu go back to it
@@ -73,7 +76,7 @@ def main(argv=None):
             elif opts.command != "exit":
                 AnkiToolApp(opts).run()
 
-            if not from_menu or Ui.auto or not Ui.yes(BACK_TO_MENU, "y"):
+            if not from_menu or Ui.auto or not _more():
                 break
             argv = []  # Resets the arguments so the interactive menu shows up next time
 
@@ -84,7 +87,7 @@ def main(argv=None):
         except SystemExit:                               # only from argparse: -h, -V, usage error
             if not from_menu:
                 raise
-            if Ui.auto or not Ui.yes(BACK_TO_MENU, "y"):
+            if Ui.auto or not _more():
                 break
             argv = []
         except KeyboardInterrupt:

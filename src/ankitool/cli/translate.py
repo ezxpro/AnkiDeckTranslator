@@ -3,7 +3,7 @@ from pathlib import Path
 from ankitool.cache.translation import CacheView, DEFAULT_MODE, MODES, TranslationCache
 from ankitool.core.settings import provider_option
 from ankitool.cli.console import (ConsoleReporter, Ui, ask_input, ask_paths, choose_provider,
-                                  dim, paint)
+                                  dim, head, paint, pick_language)
 from ankitool.cli.rename import DeckRenameCli
 from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError
 from ankitool.core.paths import SCRIPT_DIR
@@ -53,19 +53,22 @@ class AnkiToolApp:
                                   f"Use the 'langs' command to see the codes.")
             self._accept_target(target)
         else:
-            if not Ui.auto:
-                Ui.show_langs("Languages you can translate into (code and name):",
-                              self.client.target_langs)
-                print("Which language do you want to translate the deck into?")
-                print("Type the CODE from the list above (e.g. PT-BR, EN-US, ES) and press Enter.")
-                print(f"If you just press Enter, I'll use {self.client.default_target}.")
+            default = self.client.default_target
+            title = "Translate the deck into which language?"
+            raw = pick_language(title, self.client.target_langs, default)
             while True:
-                raw = Ui.ask("Target language", self.client.default_target)
+                if raw is None:                          # no interactive terminal: plain question
+                    if not Ui.auto:
+                        Ui.show_langs("Languages you can translate into (code and name):",
+                                      self.client.target_langs)
+                        print(dim(f"Type a code or a name (e.g. PT-BR, french). Enter = {default}."))
+                    raw = Ui.ask("Target language", default)
                 target = self.client.resolve_target(raw)
                 if target and self._accept_target(target):
                     break
                 if not target:
-                    print(f"  '{raw}' is not a valid language. Type a code from the list above or a language name.")
+                    print(paint(f"  '{raw}' is not a valid language. Type a code or a language name.", "31"))
+                raw = pick_language(title, self.client.target_langs, default)
         self.target = target
 
     def show_detected(self, op, detected):

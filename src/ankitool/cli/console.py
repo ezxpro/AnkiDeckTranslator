@@ -345,6 +345,47 @@ def read_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def pager(text):
+    """Keyboard-scrollable viewer: Up/Down, PgUp/PgDn (or b/Space), Home/End, q or Esc to leave.
+    Long lines wrap, so nothing is cut. Without an interactive terminal it just prints."""
+    if not _interactive():
+        print(text)
+        return
+    os.system("")                                       # enables ANSI codes on old Windows consoles
+
+    def wrapped(width):
+        rows = []
+        for line in text.split("\n"):
+            lead = " " * (len(line) - len(line.lstrip()))
+            rows += textwrap.wrap(line.lstrip(), width, initial_indent=lead,
+                                  subsequent_indent=lead + "  ", break_long_words=True) or [""]
+        return rows
+
+    top = 0
+    sys.stdout.write("\033[?1049h\033[?1007h\033[?25l")   # alternate screen, wheel = arrows, no cursor
+    try:
+        while True:
+            size = shutil.get_terminal_size()
+            h = max(1, size.lines - 1)
+            rows = wrapped(max(20, size.columns - 1))
+            top = max(0, min(top, len(rows) - h))
+            view = rows[top:top + h]
+            status = f"lines {top + 1}-{top + len(view)} of {len(rows)}   Up/Down  PgUp/PgDn  Home/End   q quit"
+            sys.stdout.write("\033[H\033[J" + "\n".join(view) + f"\033[{h + 1};1H" + dim(status))
+            sys.stdout.flush()
+            key = read_key()
+            if key in ("q", "Q", "esc"):
+                return
+            top += {"up": -1, "down": 1, "pgup": -h, "b": -h, "pgdn": h, " ": h}.get(key, 0)
+            if key in ("home", "g"):
+                top = 0
+            elif key in ("end", "G"):
+                top = len(rows)
+    finally:
+        sys.stdout.write("\033[?25h\033[?1007l\033[?1049l")
+        sys.stdout.flush()
+
+
 def _entries(cur, suffix):
     """[(label, path, is_dir)]: '..' first, then folders, then files with the given suffix."""
     items = []

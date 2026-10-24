@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from ankitool.cache.translation import DEFAULT_MODE, MODES, TranslationCache
-from ankitool.cli.console import Ui
+from ankitool.cli.console import Ui, pager
 from ankitool.core.errors import Cancelled, ConfigError
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.progress import Reporter
@@ -126,22 +126,32 @@ class CacheApp:
         rows = cache.export_rows(service=o.provider, target=o.target, lang=o.lang,
                                  text=o.text, limit=o.limit)
         cache.close()
-        if o.json:
-            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        as_json = o.json or bool(o.output and Path(o.output).suffix.lower() == ".json")
+        if as_json:
+            text = json.dumps(rows, ensure_ascii=False, indent=2)       # exact content
+        else:
+            one = lambda s: " ".join(str(s).split())                    # whitespace -> single spaces
+            blocks = []
+            for r in rows:
+                if r["output"] is None:
+                    blocks.append(f"[{r['detected_lang'] or '?'}] {one(r['text'])}   (no translation)")
+                else:
+                    who = r["service"] + (f"/{r['variant']}" if r["variant"] else "")
+                    blocks.append(f"[{r['source']}->{r['target']}] {who}\n"
+                                  f"  {one(r['text'])}\n  => {one(r['output'])}")
+            text = "\n".join(blocks)
+        if o.output:                                    # to disk, always in full
+            path = Path(o.output).expanduser().resolve()
+            if path.exists() and not Ui.auto and not Ui.yes(f"Replace {path.name}?", "n"):
+                raise Cancelled("Cancelled. Nothing was written.")
+            path.write_text(text + "\n", encoding="utf-8")
+            print(f"Wrote {len(rows)} rows to {path}")
             return
-
-        def one(s, w=110):                              # one line, truncated
-            s = " ".join(str(s).split())
-            return s if len(s) <= w else s[:w - 1] + "…"
-
-        for r in rows:
-            if r["output"] is None:
-                print(f"[{r['detected_lang'] or '?'}] {one(r['text'])}   (no translation)")
-                continue
-            who = r["service"] + (f"/{r['variant']}" if r["variant"] else "")
-            print(f"[{r['source']}->{r['target']}] {who}\n  {one(r['text'])}\n  => {one(r['output'])}")
-        print(f"\n{len(rows)} row(s)" + (f" (limit {o.limit}; -n 0 shows all)"
-                                         if o.limit and len(rows) == o.limit else ""))
+        summary = f"{len(rows)} row(s)" + (f" (limit {o.limit})" if o.limit and len(rows) == o.limit else "")
+        if o.no_pager:
+            print(text + ("\n\n" if text else "") + summary)
+        else:
+            pager(text + ("\n\n" if text else "") + summary)
 
     def _select(self):
         if Ui.auto:

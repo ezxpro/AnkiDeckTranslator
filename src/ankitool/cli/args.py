@@ -301,18 +301,23 @@ def parse_args(argv=None):
                            description="Prints saved texts and translations (service, model, output). "
                                        "Filters are ANDed. Reads only; no API calls.",
                            epilog="examples:\n"
-                                  "  ankitool cache list                          first 50 rows\n"
-                                  "  ankitool cache list -p deepl -t PT-BR -n 0   all of DeepL's PT-BR\n"
-                                  "  ankitool cache list --text haus --json       as JSON, on screen",
+                                  "  ankitool cache list                          scroll through everything\n"
+                                  "  ankitool cache list -p deepl -t PT-BR -n 20  20 rows of DeepL's PT-BR\n"
+                                  "  ankitool cache list -o cache.txt             full text, to a file\n"
+                                  "  ankitool cache list --text haus -o out.json  exact content, as JSON",
                            formatter_class=WrapHelp)
     cl.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
                     help="only this service's translations")
     cl.add_argument("-t", "--target", metavar="CODE", help="only this target language, e.g. PT-BR")
     cl.add_argument("--lang", metavar="CODE", help="only this source language, e.g. IT")
     cl.add_argument("--text", metavar="TEXT", help="only original texts containing TEXT (any case)")
-    cl.add_argument("-n", "--limit", type=int, default=50, metavar="N",
-                    help="max rows (default 50; 0 = all)")
-    cl.add_argument("--json", action="store_true", help="print JSON instead of the readable list")
+    cl.add_argument("-n", "--limit", type=int, metavar="N", help="max rows (default: all)")
+    cl.add_argument("-o", "--output", metavar="FILE",
+                    help="write everything to FILE instead of the screen (.json = JSON, "
+                         "otherwise readable text; asks before replacing one)")
+    cl.add_argument("--json", action="store_true", help="JSON instead of the readable list")
+    cl.add_argument("--no-pager", action="store_true",
+                    help="print straight to the terminal instead of the scrollable viewer")
     ci = ca_sub.add_parser("invalidate", parents=[common, cdir],
                            help="delete saved translations (by service, language or text), or everything",
                            description="Deletes the saved translations that match ALL the "

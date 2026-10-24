@@ -3,6 +3,8 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import os
+import sys
 
 from ankitool.core.errors import ConfigError
 from ankitool.core.settings import provider_option
@@ -16,6 +18,10 @@ _AZURE_CODE = {"PT-BR": "pt", "PT-PT": "pt-pt", "EN-GB": "en", "EN-US": "en",
                "ZH": "zh-Hans", "ZH-HANS": "zh-Hans", "ZH-HANT": "zh-Hant"}
 MAX_CHARS = 45_000                             # Azure accepts 50,000 characters per request
 
+
+def _warn(msg):
+    on = sys.stderr.isatty() and not os.environ.get("NO_COLOR")
+    print(f"\033[33m{msg}\033[0m" if on else msg, file=sys.stderr, flush=True)
 
 def _code(c):
     return _AZURE_CODE.get(c.upper(), c.lower())
@@ -42,6 +48,10 @@ class AzureProvider(TranslationProvider):
                          or self.default_endpoint).rstrip("/")
         if not self.endpoint.startswith("https://"):
             raise ConfigError(f"AZURE_ENDPOINT must start with https://: {self.endpoint}")
+        if not self.region:
+            _warn("Warning: AZURE_REGION is not set. Regional and multi-service Azure resources need it "
+                  "(it is shown next to the key in the Azure portal); without it requests usually fail "
+                  "with HTTP 401. Add AZURE_REGION=<region> to .env.")       
         super().__init__(key)
 
     def connect(self, key):
@@ -103,8 +113,9 @@ class AzureProvider(TranslationProvider):
             if e.code >= 500:
                 raise _Retryable(f"Azure server error (HTTP {e.code})") from e
             detail = e.read()[:200].decode("utf-8", "replace") if e.fp else ""
+            hint = " AZURE_REGION is not set." if not self.region and e.code in (401, 403) else ""
             raise ConfigError(f"Azure rejected the request (HTTP {e.code}). Check AZURE_KEY, AZURE_REGION "
-                              f"and your quota. {detail}") from e
+                              f"and your quota.{hint} {detail}") from e
         except OSError as e:                   # URLError, timeouts, connection errors
             raise _Retryable(f"network error talking to Azure: {e}") from e
 

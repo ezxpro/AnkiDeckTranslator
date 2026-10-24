@@ -2,7 +2,8 @@ from pathlib import Path
 
 from ankitool.cache.translation import CacheView, DEFAULT_MODE, MODES, TranslationCache
 from ankitool.core.settings import provider_option
-from ankitool.cli.console import ConsoleReporter, Ui, ask_input, ask_paths, choose_provider
+from ankitool.cli.console import (ConsoleReporter, Ui, ask_input, ask_paths, choose_provider,
+                                  dim, paint)
 from ankitool.cli.rename import DeckRenameCli
 from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError
 from ankitool.core.paths import SCRIPT_DIR

@@ -93,6 +93,10 @@ class Ui:
         """Yes/no question. Only accepts y/n (or variations); Enter uses the default."""
         if Ui.auto:
             return default.lower() in YES_WORDS
+        if _interactive():
+            idx = menu(msg, ["Yes", "No"], pos=0 if default.lower() in YES_WORDS else 1,
+                       hotkeys={"y": 0, "s": 0, "n": 1}, tones=["32", "31"])
+            return idx == 0
         label = "yes" if default.lower() in YES_WORDS else "no"
         while True:
             r = input(f"{msg}\n  Type y (yes) or n (no). Just Enter = {label}: ").strip().lower()
@@ -108,6 +112,15 @@ class Ui:
     def choose(title, opts, default):
         """Single-choice menu. opts: {"1": "Text"} or {"1": ("Text", "short explanation")}.
         Numbers and labels are aligned; descriptions are wrapped under their label."""
+        if _interactive():
+            keys = list(opts)
+            idx = menu(title, [v[0] if isinstance(v, tuple) else v for v in opts.values()],
+                       pos=keys.index(default) if default in keys else 0,
+                       descs=[v[1] if isinstance(v, tuple) else None for v in opts.values()],
+                       hotkeys={k: i for i, k in enumerate(keys)})
+            if idx is None:
+                raise Cancelled("Cancelled.")
+            return keys[idx]
         on = _color_on(sys.stdout)
         width = shutil.get_terminal_size((80, 24)).columns
         items = [(k, *(v if isinstance(v, tuple) else (v, None))) for k, v in opts.items()]
@@ -154,6 +167,10 @@ class Ui:
         n = len(labels)
         if Ui.auto:
             return list(range(n)) if default == "all" else [0] if default == "first" else None
+        if _interactive():
+            checked = (set(range(n)) if default == "all" else {0} if default == "first" else set()) if multi else None
+            res = menu(title, labels, checked=checked, intro=intro, cancel=cancel)
+            return res if res is None or multi else [res]
         #print(f"\n{title}")
         print(f"\n{head(title)}")
         if intro:
@@ -224,6 +241,75 @@ def default_start():
     if has_apkg(cwd) or not has_apkg(SCRIPT_DIR):
         return cwd
     return SCRIPT_DIR
+
+def _interactive():
+    return not Ui.auto and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _rows(text):
+    """Terminal rows a text takes (ANSI codes don't count; long lines wrap)."""
+    w = shutil.get_terminal_size().columns
+    return sum(max(1, -(-len(re.sub(r"\033\[[0-9;]*m", "", l)) // w)) for l in text.split("\n"))
+
+
+def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=None,
+         tones=None, cancel=True):
+    """Keyboard menu drawn in place. checked=None: choose one (Enter); checked=a set: tick several
+    (Space) and confirm with Enter. Returns the index, the sorted ticked indices, or None if
+    cancelled (Esc). tones: colour code per item. hotkeys: {key: index}, choose at once (single only)."""
+    os.system("")                                       # enables ANSI codes on old Windows consoles
+    multi, n, msg, drawn = checked is not None, len(labels), "", 0
+    while True:
+        lines = [head(title)] + ([dim(intro)] if intro else [])
+        for i, lab in enumerate(labels):
+            code = tones[i] if tones else None
+            box = (paint("[x]", "1;32") if i in checked else dim("[ ]")) + " " if multi else ""
+            if i == pos:
+                lines.append(f" {num('>')} {box}" + paint(f" {lab} ", f"7;{code}" if code else "7"))
+            else:
+                lines.append(f"   {box}" + (paint(lab, code) if code else lab))
+            if descs and descs[i]:
+                lines.append(dim(f"       {descs[i]}"))
+        lines.append(dim("Up/Down move   " + ("Space tick   a all/none   Enter confirm" if multi
+                                              else "Enter select") + ("   Esc cancel" if cancel else "")))
+        if msg:
+            lines.append(paint(msg, "31"))
+        text = "\n".join(lines)
+        print((f"\033[{drawn}A\033[J" if drawn else "") + text, flush=True)
+        drawn = _rows(text)
+
+        key, msg, result, done = read_key(), "", None, False
+        if key == "up":
+            pos = (pos - 1) % n
+        elif key == "down":
+            pos = (pos + 1) % n
+        elif key == "home":
+            pos = 0
+        elif key == "end":
+            pos = n - 1
+        elif not multi and hotkeys and key.lower() in hotkeys:
+            pos, result, done = hotkeys[key.lower()], hotkeys[key.lower()], True
+        elif multi and key == " ":
+            checked ^= {pos}
+        elif multi and key == "a":
+            checked = set() if len(checked) == n else set(range(n))
+        elif key == "enter":
+            if not multi:
+                result, done = pos, True
+            elif checked:
+                result, done = sorted(checked), True
+            else:
+                msg = "Tick at least one item with Space."
+        elif key == "esc":
+            if cancel:
+                done = True
+            else:
+                msg = "Choose one of the options."
+        if done:
+            answer = ("cancelled" if result is None else f"{len(result)} selected" if multi
+                      else labels[result])
+            print(f"\033[{drawn}A\033[J" + head(title.split("\n")[0]) + dim("  ->  ") + answer, flush=True)
+            return result
 
 def read_key():
     """One key press: 'up','down','left','right','pgup','pgdn','home','end','enter','esc',

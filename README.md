@@ -165,7 +165,7 @@ ankitool bench                          # measure a service's speed / rate limit
 | `langs`     | List a service's target (or `--source`) languages | *(no file)* |
 | `bench`     | Measure a service's speed/rate limits (real API calls) | *(no file)* |
 | `config`    | Show/change saved preferences (`config.json`) | *(no file)* |
-| `cache`     | Show or change which saved translations each service reuses; delete some or all | *(no file)* |
+| `cache`     | Show, change or export which saved translations each service reuses; delete some or all | *(no file, or the export file)* |
 
 Common flags on most commands: `-y/--yes` (don't ask, use defaults), `-q/--quiet` (only
 warnings and the final result). Any option you don't provide and isn't defaulted will be asked
@@ -189,7 +189,7 @@ ankitool translate deck.apkg [options]
 | `--field FIELD` / `--skip-field FIELD` | Translate only / not a field (or `NOTETYPE:FIELD`) |
 | `--sample N` | Texts per field sampled for detection (default 10) |
 | `--min-ratio R` | Min agreement fraction (0–1) to trust detection (default 0.6) |
-| `--cache-mode shared\|isolated` | Which saved translations are reused (see [Caching](#caching)); default: the service's setting, or `shared` |
+| `--cache-mode shared\|provider\|isolated` | Which saved translations are reused (see [Caching](#caching)); default: the service's setting, or `shared` |
 | `--cache-dir FOLDER` | Folder for cache files (default: script folder) |
 | `-o, --output OUT` | Output file |
 | `-f, --force` | Overwrite an existing output file |
@@ -252,14 +252,15 @@ keys are stored here — those stay in `.env`. With no action it defaults to `sh
 
 ```
 ankitool cache                                   # show each service's mode and stored count
-ankitool cache use SERVICE [shared|isolated]     # show or set one service's mode
+ankitool cache use SERVICE [shared|provider|isolated]   # show or set one service's mode
 ankitool cache use SERVICE --reset               # back to shared
 ankitool cache select                            # choose service and mode from a menu
+ankitool cache export FILE                       # write the whole cache to a JSON file
 ankitool cache invalidate -p SERVICE [-t CODE] [--lang CODE] [--text TEXT] [-y]   # delete some translations
-ankitool cache invalidate --all [-y]             # empty the whole cache
+ankitool cache invalidate --all [-y]             # delete all translations and text languages
 ```
 
-`invalidate` deletes the saved translations and deck names that match **all** the filters you give.
+`invalidate` deletes the saved translations that match **all** the filters you give.
 Text languages are kept, except with `--all`. It asks first unless `-y` is given. Deleted texts are sent
 to the service again next time they are translated.
 
@@ -285,38 +286,31 @@ translation) so they aren't mangled.
 
 ## Caching
 
-All translations are saved in **one file, `cache.json`**, shared by every service. Each service
-stores its own translations under its name, so services never overwrite each other. Deck names and
-detected languages are saved there too. Re-running a deck costs nothing for texts already stored.
+Translations are stored in **one SQLite file, `cache.sqlite`**, in the script's folder (or
+`--cache-dir FOLDER`). It has four tables:
 
-```
-trans: { target: { source language: { hash of the text: { service: translation } } } }
-lang:  { hash of the text: detected language }        shared by all services
-decks: { target: { source language: { deck name: { service: name } } } }
-```
+| Table | Holds |
+| ----- | ----- |
+| `texts` | each distinct text once, with its detected language |
+| `providers` | the service names (DeepL, Gemini, ...) |
+| `profiles` | a service and model pair, such as `gemini` with its model |
+| `translations` | one row per text, source language, target language and profile |
 
-Only hashes of the texts are stored for translations. The file is safe to delete for a clean start.
-Use `--cache-dir FOLDER` to put it somewhere else.
+Each text is stored once, however many decks, fields or services use it. Deck names are stored the
+same way, so changing one line of a deck only sends that line again. Each service and model keeps
+its own translations, so services never overwrite each other.
 
-### Modes
+Which saved translations a service may reuse is set by its **mode**:
 
-| Mode | Reads | Writes |
-| ---- | ----- | ------ |
-| `shared` (default) | the service's own translation; if it has none, a translation stored by another service (alphabetical order, so the choice is always the same) | its own entry |
-| `isolated` | only the service's own translation | its own entry |
+| Mode | Reuses |
+| ---- | ------ |
+| `shared` (default) | its own translation first, then any other service's |
+| `provider` | any model of its own service; nothing from other services |
+| `isolated` | only its exact service and model |
 
-Each service can have its own mode, saved in `config.json`:
-
-```
-ankitool config set deepl.cache isolated
-ankitool config set gemini.cache shared
-```
-
-For a single run, use `--cache-mode shared|isolated`. The order is: flag, then the service's
-setting, then `shared`.
-
-A translation reused from another service is not copied under the current service's name, so its
-origin stays in the file.
+`ankitool cache export FILE` writes the whole cache to a JSON file, one row per translation, to
+inspect it. Delete `cache.sqlite` for a clean start. Older versions used `cache.json`, which is no
+longer read.
 
 ## Command help
 
@@ -354,13 +348,13 @@ For any command, whatever is not given as an option is asked for, unless
 
 ```
 usage: ankitool translate [-h] [-y] [-q] [-o OUTPUT] [-f] [--keep-scheduling]
-                          [--legacy | --no-legacy] [-p SERVICE] [-t CODE]
-                          [-l CODES] [-d {none,main,all}]
-                          [-m {auto,manual,review,keep}]
-                          [--deck-name CURRENT=NEW] [--cache-mode MODE]
-                          [--dry-run] [--field FIELD] [--skip-field FIELD]
-                          [--sample N] [--min-ratio R] [--cache-dir FOLDER]
-                          [INPUT]
+                           [--legacy | --no-legacy] [-p SERVICE] [-t CODE]
+                           [-l CODES] [-d {none,main,all}]
+                           [-m {auto,manual,review,keep}]
+                           [--deck-name CURRENT=NEW] [--cache-mode MODE]
+                           [--dry-run] [--field FIELD] [--skip-field FIELD]
+                           [--sample N] [--min-ratio R] [--cache-dir FOLDER]
+                           [INPUT]
 
 Translates the fields of a deck with a translation service (--provider).
 Default output: <input>_out.apkg. With -y: PT-BR, all detected languages, deck
@@ -374,7 +368,8 @@ options:
   -y, --yes             don't ask anything: use each command's defaults
   -q, --quiet           only show warnings and the final result (no progress
                         messages)
-  -o, --output OUTPUT   output .apkg file
+  -o OUTPUT, --output OUTPUT
+                        output .apkg file
   -f, --force           overwrite the output file if it already exists
                         (otherwise, with -y, the program stops with an error)
   --keep-scheduling     keep study history (dates, intervals) and deck options
@@ -383,17 +378,19 @@ options:
                         legacy .apkg format, accepted by any Anki/AnkiDroid
                         version (default); --no-legacy writes the newer,
                         smaller format
-  -p, --provider SERVICE
+  -p SERVICE, --provider SERVICE
                         translation service: deepl, fake, gemini, groq, openai
                         (default: deepl)
-  -t, --target CODE     target language, e.g. PT-BR, EN-US (see the 'langs'
+  -t CODE, --target CODE
+                        target language, e.g. PT-BR, EN-US (see the 'langs'
                         command)
-  -l, --lang CODES      source language(s) to translate, comma-separated (e.g.
+  -l CODES, --lang CODES
+                        source language(s) to translate, comma-separated (e.g.
                         IT,EN) or 'all' for all detected ones
-  -d, --rename-decks {none,main,all}
+  -d {none,main,all}, --rename-decks {none,main,all}
                         deck names: none = leave unchanged, main = top-level
                         decks only, all = top-level and sub-decks
-  -m, --deck-method {auto,manual,review,keep}
+  -m {auto,manual,review,keep}, --deck-method {auto,manual,review,keep}
                         how to rename decks: auto (by the service), manual
                         (you type), review (service suggestion, one by one) or
                         keep (only --deck-name ones)
@@ -403,8 +400,9 @@ options:
                         renamed
   --cache-mode MODE     which saved translations are reused: shared = any
                         service's (this service's first, then another's);
-                        isolated = only this service's. Default: the one set
-                        in config.json (providers.SERVICE.cache), or shared
+                        provider = any model of this service; isolated = only
+                        this service and model. Default: the one set in
+                        config.json (providers.SERVICE.cache), or shared
   --dry-run             only calculates how many texts and characters would be
                         translated; does not translate or create a file
                         (language detection still uses some characters)
@@ -425,9 +423,9 @@ options:
 
 ```
 usage: ankitool reverse [-h] [-y] [-q] [-o OUTPUT] [-f] [--keep-scheduling]
-                        [--legacy | --no-legacy] [--notetype NAME]
-                        [--swap FIELD1=FIELD2]
-                        [INPUT]
+                         [--legacy | --no-legacy] [--notetype NAME]
+                         [--swap FIELD1=FIELD2]
+                         [INPUT]
 
 Swaps the front and back of the cards by exchanging the fields in the card
 templates. The text is not changed, only which side each field shows on.
@@ -443,7 +441,8 @@ options:
   -y, --yes             don't ask anything: use each command's defaults
   -q, --quiet           only show warnings and the final result (no progress
                         messages)
-  -o, --output OUTPUT   output .apkg file
+  -o OUTPUT, --output OUTPUT
+                        output .apkg file
   -f, --force           overwrite the output file if it already exists
                         (otherwise, with -y, the program stops with an error)
   --keep-scheduling     keep study history (dates, intervals) and deck options
@@ -497,7 +496,7 @@ service's API key.
 
 options:
   -h, --help            show this help message and exit
-  -p, --provider SERVICE
+  -p SERVICE, --provider SERVICE
                         translation service (default: deepl)
   --source              list SOURCE languages (the ones the service
                         recognizes) instead of the target ones
@@ -511,7 +510,7 @@ examples:
 
 ```
 usage: ankitool bench [-h] [-y] [-q] [-p SERVICE] [-t CODE] [--calls N]
-                      [--batch N] [--workers LIST]
+                       [--batch N] [--workers LIST]
 
 Measures how fast a service is and where it starts to refuse requests. It
 makes real API calls with 1, 2, 4... parallel workers and reports speed and
@@ -523,9 +522,10 @@ options:
   -y, --yes             don't ask anything: use each command's defaults
   -q, --quiet           only show warnings and the final result (no progress
                         messages)
-  -p, --provider SERVICE
+  -p SERVICE, --provider SERVICE
                         translation service (default: deepl)
-  -t, --target CODE     target language (default: the service's default)
+  -t CODE, --target CODE
+                        target language (default: the service's default)
   --calls N             API calls per worker count (default: 8)
   --batch N             texts per call (default: 10)
   --workers LIST        worker counts to test, comma-separated (default:
@@ -564,7 +564,7 @@ keys:
   SERVICE.model                  model name for that service
   SERVICE.base_url               API address (https only, except localhost)
   SERVICE.max_workers            parallel requests (whole number >= 1)
-  SERVICE.cache                  cache mode: shared or isolated
+  SERVICE.cache                  cache mode: shared, provider or isolated
 examples:
   ankitool config show
   ankitool config set provider groq
@@ -578,24 +578,27 @@ examples:
 usage: ankitool cache [-h] [-y] [-q] [--cache-dir FOLDER] ACTION ...
 
 Shows or changes how each service reuses the translations already in
-cache.json. shared (default) = reuse any service's translation when its own is
-missing; isolated = only its own. Set per service, or per run with translate
---cache-mode.
+cache.sqlite. shared (default) = reuse any service's translation when its own
+is missing; provider = any model of its own service only; isolated = only its
+exact service and model. Set per service, or per run with translate --cache-
+mode.
 
 positional arguments:
   ACTION
     show              show each service's mode and stored count
     select            choose service and mode from a menu
+    export            write the cache to a JSON file
     invalidate        delete saved translations (by service, language or
                       text), or everything
-    use               set (or show) one service's mode: shared or isolated
+    use               set (or show) one service's mode: shared, provider or
+                      isolated
 
 options:
   -h, --help          show this help message and exit
   -y, --yes           don't ask anything: use each command's defaults
   -q, --quiet         only show warnings and the final result (no progress
                       messages)
-  --cache-dir FOLDER  folder of cache.json (default: the script's folder)
+  --cache-dir FOLDER  folder of cache.sqlite (default: the script's folder)
 
 examples:
   ankitool cache                       show each service's mode
@@ -618,31 +621,56 @@ options:
   -y, --yes           don't ask anything: use each command's defaults
   -q, --quiet         only show warnings and the final result (no progress
                       messages)
-  --cache-dir FOLDER  folder of cache.json (default: the script's folder)
+  --cache-dir FOLDER  folder of cache.sqlite (default: the script's folder)
 
 example:
   ankitool cache show
 ```
 
-### `ankitool cache use -h`
+### `ankitool cache export -h`
 
 ```
-usage: ankitool cache use [-h] [-y] [-q] [--cache-dir FOLDER] [--reset]
-                          [SERVICE] [MODE]
+usage: ankitool cache export [-h] [-y] [-q] [--cache-dir FOLDER] FILE
 
-Sets the reuse mode of one service, saved in config.json. Without MODE it
-shows the current one. --reset goes back to shared.
+Writes every saved text, its detected language and each saved translation
+(service, model, output) to a JSON file, for inspection. Reads only; no API
+calls.
 
 positional arguments:
-  SERVICE             translation service, e.g. deepl, gemini, groq, openai
-  MODE                shared or isolated (omit to show the current mode)
+  FILE                JSON file to write (asks before replacing one)
 
 options:
   -h, --help          show this help message and exit
   -y, --yes           don't ask anything: use each command's defaults
   -q, --quiet         only show warnings and the final result (no progress
                       messages)
-  --cache-dir FOLDER  folder of cache.json (default: the script's folder)
+  --cache-dir FOLDER  folder of cache.sqlite (default: the script's folder)
+
+examples:
+  ankitool cache export cache.json
+  ankitool cache export ~/Desktop/cache.json
+```
+
+### `ankitool cache use -h`
+
+```
+usage: ankitool cache use [-h] [-y] [-q] [--cache-dir FOLDER] [--reset]
+                           [SERVICE] [MODE]
+
+Sets the reuse mode of one service, saved in config.json. Without MODE it
+shows the current one. --reset goes back to shared.
+
+positional arguments:
+  SERVICE             translation service, e.g. deepl, gemini, groq, openai
+  MODE                shared, provider or isolated (omit to show the current
+                      mode)
+
+options:
+  -h, --help          show this help message and exit
+  -y, --yes           don't ask anything: use each command's defaults
+  -q, --quiet         only show warnings and the final result (no progress
+                      messages)
+  --cache-dir FOLDER  folder of cache.sqlite (default: the script's folder)
   --reset             remove the saved mode (back to shared)
 
 examples:
@@ -665,7 +693,7 @@ options:
   -y, --yes           don't ask anything: use each command's defaults
   -q, --quiet         only show warnings and the final result (no progress
                       messages)
-  --cache-dir FOLDER  folder of cache.json (default: the script's folder)
+  --cache-dir FOLDER  folder of cache.sqlite (default: the script's folder)
 
 example:
   ankitool cache select
@@ -675,26 +703,27 @@ example:
 
 ```
 usage: ankitool cache invalidate [-h] [-y] [-q] [--cache-dir FOLDER]
-                                 [-p SERVICE] [-t CODE] [--lang CODE]
-                                 [--text TEXT] [--all]
+                                  [-p SERVICE] [-t CODE] [--lang CODE]
+                                  [--text TEXT] [--all]
 
-Deletes the saved translations and deck names that match ALL the filters
-given. Text languages are kept. Asks first unless -y. Texts deleted this way
-are sent to the service again next time.
+Deletes the saved translations that match ALL the filters given. Text
+languages are kept. Asks first unless -y. Texts deleted this way are sent to
+the service again next time.
 
 options:
   -h, --help            show this help message and exit
   -y, --yes             don't ask anything: use each command's defaults
   -q, --quiet           only show warnings and the final result (no progress
                         messages)
-  --cache-dir FOLDER    folder of cache.json (default: the script's folder)
-  -p, --provider SERVICE
+  --cache-dir FOLDER    folder of cache.sqlite (default: the script's folder)
+  -p SERVICE, --provider SERVICE
                         only this service's translations
-  -t, --target CODE     only this target language, e.g. PT-BR
+  -t CODE, --target CODE
+                        only this target language, e.g. PT-BR
   --lang CODE           only this source language, e.g. IT
   --text TEXT           only this original text
-  --all                 delete everything: translations, text languages and
-                        deck names
+  --all                 delete all translations and text languages (manual
+                        corrections are kept)
 
 examples:
   ankitool cache invalidate -p gemini              all of Gemini's
@@ -709,7 +738,7 @@ examples:
 src/ankitool/
   core/        errors, constants, paths, progress (Reporter, CancelToken), text helpers   (no I/O to the user)
   providers/   base.py (contract + registry), deepl.py, gemini.py, openai_compat.py, fake.py
-  cache/       translation.py: the one cache.json for all services, its modes and views
+  cache/       translation.py: the one cache.sqlite for all services, its modes and views
   anki/        collection.py: the only module that imports the `anki` package
   ops/         translate / rename / reverse / bench: config dataclasses + operations, no print/input
   cli/         console (Ui, ConsoleReporter, file picker), per-command apps, args, main
@@ -733,4 +762,3 @@ or network access (provider config tests isolate themselves from `.env`).
 ## License
 
 [GPL-3.0](LICENSE)
-

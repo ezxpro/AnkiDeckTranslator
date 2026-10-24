@@ -8,6 +8,7 @@ import re
 from ankitool.anki.collection import AnkiCollection
 from ankitool.cache.translation import CacheView, DEFAULT_MODE
 from ankitool.core.constants import MIN_RATIO, SAMPLE
+from ankitool.core.constants import MIN_DETECT_CHARS, MIN_RATIO, SAMPLE
 from ankitool.core.errors import ConfigError, ProviderUnavailable
 from ankitool.core.progress import Reporter
 from ankitool.core.text import TextTools, lang_base
@@ -48,6 +49,8 @@ class FieldLanguageDetector:
         for key, vs in field_values.items():           # 1) plan every field first
             self.rep.check_cancelled()
             uniq = list(dict.fromkeys(TextTools.plain(v) for v in vs if TextTools.has_letters(v)))
+            long = [p for p in uniq if len(p) >= MIN_DETECT_CHARS]
+            uniq = long or sorted(uniq, key=len, reverse=True)[:self.sample]   # only short texts: use the longest
             known = [p for p in uniq if p in lang_cache]
             unknown = [p for p in uniq if p not in lang_cache]
             pick = random.sample(known, min(self.sample, len(known)))
@@ -75,9 +78,12 @@ class FieldLanguageDetector:
             sample = pick + fresh
             if not sample:                              # empty field (all text filtered out)
                 continue
-            lang, cnt = collections.Counter(lang_cache[p] for p in sample).most_common(1)[0]
-            ex = re.sub(r"\s+", " ", sample[0])[:45]
-            detected[key] = (lang, cnt / len(sample), ex)
+            votes = collections.Counter()
+            for p in sample:                            # longer texts weigh more
+                votes[lang_cache[p]] += len(p)
+            lang, weight = votes.most_common(1)[0]
+            ex = re.sub(r"\s+", " ", max(sample, key=len))[:45]
+            detected[key] = (lang, weight / sum(votes.values()), ex)
 
         if sent:
             self.cache.save()

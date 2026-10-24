@@ -1,30 +1,30 @@
 import json
+import os
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-import os
-import sys
 
 from ankitool.core.errors import ConfigError
+from ankitool.core.languages import NAMES, TARGETS
 from ankitool.core.settings import provider_option
 from ankitool.core.text import TextTools, lang_base
 from ankitool.providers.base import Language, TranslationProvider, TranslationResult, register_provider
-from ankitool.providers.llm import TARGETS, _Retryable, setting
+from ankitool.providers.llm import _Retryable, setting
 
 # ankitool uses DeepL-style codes (PT-BR, EN-US...); Azure spells a few of them differently.
-# Anything not listed here is just lowercased ("IT" -> "it").
+# Anything not listed here is just lowercased ("IT" -> "it"). Also the fallback if /languages fails.
 _AZURE_CODE = {"PT-BR": "pt", "PT-PT": "pt-pt", "EN-GB": "en", "EN-US": "en",
                "ZH": "zh-Hans", "ZH-HANS": "zh-Hans", "ZH-HANT": "zh-Hant"}
+_FROM_AZURE = {"pt": ["PT-BR"], "pt-pt": ["PT-PT"], "en": ["EN-GB", "EN-US"],
+               "zh-Hans": ["ZH-HANS"], "zh-Hant": ["ZH-HANT"]}      # Azure code -> ankitool codes
 MAX_CHARS = 45_000                             # Azure accepts 50,000 characters per request
 
 
 def _warn(msg):
     on = sys.stderr.isatty() and not os.environ.get("NO_COLOR")
     print(f"\033[33m{msg}\033[0m" if on else msg, file=sys.stderr, flush=True)
-
-def _code(c):
-    return _AZURE_CODE.get(c.upper(), c.lower())
 
 
 @register_provider
@@ -43,6 +43,8 @@ class AzureProvider(TranslationProvider):
 
     def __init__(self, key=None):
         self.chars = 0                         # characters sent in this run (what Azure bills)
+        self._codes = dict(_AZURE_CODE)        # ankitool code -> Azure code (extended by fetch_target_languages)
+        self._pairs = [(c, n) for c, n in TARGETS]
         self.region = setting("AZURE_REGION") or provider_option(self.name, "region") or ""
         self.endpoint = (setting("AZURE_ENDPOINT") or provider_option(self.name, "endpoint")
                          or self.default_endpoint).rstrip("/")
@@ -51,20 +53,39 @@ class AzureProvider(TranslationProvider):
         if not self.region:
             _warn("Warning: AZURE_REGION is not set. Regional and multi-service Azure resources need it "
                   "(it is shown next to the key in the Azure portal); without it requests usually fail "
-                  "with HTTP 401. Add AZURE_REGION=<region> to .env.")       
+                  "with HTTP 401. Add AZURE_REGION=<region> to .env.")
         super().__init__(key)
 
     def connect(self, key):
         pass                                   # plain HTTP: nothing to create
 
     def fetch_target_languages(self):
-        return [Language(code, name) for code, name in TARGETS]
+        """Azure's own list (public endpoint, no key); the built-in table if it cannot be reached."""
+        try:
+            req = urllib.request.Request(f"{self.endpoint}/languages?api-version=3.0&scope=translation",
+                                         headers={"Accept-Language": "en", "User-Agent": "ankitool"})
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                found = json.load(r)["translation"]
+            pairs = []
+            for azure, info in found.items():
+                for ours in _FROM_AZURE.get(azure, [azure.upper()]):
+                    pairs.append((ours, info["name"] if azure not in _FROM_AZURE else dict(TARGETS)[ours]))
+                    self._codes[ours] = azure
+                self._codes[azure.upper()] = azure
+            if pairs:
+                self._pairs = sorted(pairs)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass                               # keep the built-in table
+        return [Language(code, name) for code, name in self._pairs]
 
     def fetch_source_languages(self):
         names = {}
-        for code, name in TARGETS:
-            names.setdefault(lang_base(code), re.sub(r"\s*\(.*\)", "", name))
+        for code, name in self._pairs:
+            names.setdefault(lang_base(code), NAMES.get(lang_base(code)) or re.sub(r"\s*\(.*\)", "", name))
         return [Language(code, name) for code, name in sorted(names.items())]
+
+    def _code(self, c):
+        return self._codes.get(c.upper(), c.lower())
 
     def usage(self):
         return f"{self.chars} characters sent in this run"
@@ -89,9 +110,9 @@ class AzureProvider(TranslationProvider):
             yield chunk
 
     def _post(self, texts, target, source, html):
-        query = {"api-version": "3.0", "to": _code(target)}
+        query = {"api-version": "3.0", "to": self._code(target)}
         if source:
-            query["from"] = _code(lang_base(source))
+            query["from"] = self._code(lang_base(source))
         if html:
             query["textType"] = "html"
         headers = {"Ocp-Apim-Subscription-Key": self.key, "Content-Type": "application/json; charset=UTF-8",

@@ -136,7 +136,7 @@ class AnkiToolApp:
             op.apply(chosen)
 
             src_lang = next(iter(picked)) if len(picked) == 1 else None
-            view = CacheView(self.cache, self.client.name, self.mode)
+            view = CacheView(self.cache, self.client.name, self.client.variant, self.mode)
             renamer = DeckRenamer(op.anki, self.client, self.target, view, self.rep)
             DeckRenameCli(renamer, RenameConfig(opts.rename_decks, opts.deck_method,
                                                 opts.deck_names)).run(src_lang)

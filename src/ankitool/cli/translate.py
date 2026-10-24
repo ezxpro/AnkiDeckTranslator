@@ -64,8 +64,10 @@ class AnkiToolApp:
             if mid != cur:
                 print(f"\n{op.anki.model_names[mid]}")
                 cur = mid
-            label = lang if ratio >= op.cfg.min_ratio else f"{lang}? (uncertain)"
-            print(f" {f}: {label} ({ratio:.0%}) e.g.: {ex}")
+            ok = ratio >= op.cfg.min_ratio
+            label = paint(lang, "1;32") if ok else paint(f"{lang}? (uncertain)", "33")
+            pct = dim(f"({ratio:.0%})")
+            print(f" {f}: {label} {pct} e.g.: {dim(ex)}")
 
     def ask_languages(self, op, detected):
         options, already = op.language_options(detected)

@@ -118,6 +118,31 @@ class CacheApp:
         path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Exported {len(rows)} rows to {path}")
 
+    def _list(self):
+        o = self.opts
+        if not (self.cache_dir / "cache.sqlite").exists():
+            raise ConfigError(f"No cache file yet in {self.cache_dir}. Translate something first.")
+        cache = self._cache()
+        rows = cache.export_rows(service=o.provider, target=o.target, lang=o.lang,
+                                 text=o.text, limit=o.limit)
+        cache.close()
+        if o.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+            return
+
+        def one(s, w=110):                              # one line, truncated
+            s = " ".join(str(s).split())
+            return s if len(s) <= w else s[:w - 1] + "…"
+
+        for r in rows:
+            if r["output"] is None:
+                print(f"[{r['detected_lang'] or '?'}] {one(r['text'])}   (no translation)")
+                continue
+            who = r["service"] + (f"/{r['variant']}" if r["variant"] else "")
+            print(f"[{r['source']}->{r['target']}] {who}\n  {one(r['text'])}\n  => {one(r['output'])}")
+        print(f"\n{len(rows)} row(s)" + (f" (limit {o.limit}; -n 0 shows all)"
+                                         if o.limit and len(rows) == o.limit else ""))
+
     def _select(self):
         if Ui.auto:
             raise ConfigError("'cache select' needs an interactive terminal. "

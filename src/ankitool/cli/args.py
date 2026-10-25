@@ -363,6 +363,7 @@ def parse_args(argv=None):
                               "  SERVICE.model                  model name for that service\n"
                               "  SERVICE.base_url               API address (https only, except localhost)\n"
                               "  SERVICE.max_workers            parallel requests (whole number >= 1)\n"
+                              "  SERVICE.rpm                    max requests per minute (whole number >= 1)\n"
                               "  SERVICE.cache                  cache mode: shared, provider or isolated\n"
                               "examples:\n"
                               "  ankitool config show\n"
@@ -373,7 +374,7 @@ def parse_args(argv=None):
     c.add_argument("action", nargs="?", choices=["show", "set", "unset"], default="show",
                    help="what to do: show (default), set, or unset a preference")
     c.add_argument("key", nargs="?", metavar="KEY",
-                   help="provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
+                   help="provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.rpm / SERVICE.cache")
     c.add_argument("value", nargs="?", metavar="VALUE", help="new value (for 'set')")
 
     opts = p.parse_args(argv)
@@ -408,7 +409,7 @@ def parse_args(argv=None):
     elif opts.command == "config":
         if opts.action in ("set", "unset") and not opts.key:
             c.error(f"'config {opts.action}' needs a KEY: provider, or "
-                    f"SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
+                    f"SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.rpm / SERVICE.cache")
         if opts.action == "set" and opts.value is None:
             c.error(f"'config set {opts.key}' needs a VALUE")
         if opts.action == "show" and opts.key:

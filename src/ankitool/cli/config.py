@@ -15,7 +15,7 @@ class ConfigApp:
     @staticmethod
     def _keys(key):
         if not key:
-            raise ConfigError("Give a KEY: provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
+            raise ConfigError("Give a KEY: provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.rpm / SERVICE.cache")
         if key == "provider":
             return ("provider",)
         name, _, opt = key.partition(".")
@@ -45,7 +45,7 @@ class ConfigApp:
             print("Saved preferences (non-secret settings).")
             print("API keys live in .env, not here — see '.env.example'.")
             print("Command:  ankitool config show | set <KEY> <VALUE> | unset <KEY>")
-            print("  Keys:   provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.cache")
+            print("  Keys:   provider, or SERVICE.model / SERVICE.base_url / SERVICE.max_workers / SERVICE.rpm / SERVICE.cache")
             print("  Example: ankitool config set provider groq")
             print("           ankitool config set groq.max_workers 3")
             print()

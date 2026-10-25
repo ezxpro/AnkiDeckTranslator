@@ -78,6 +78,9 @@ class TranslationProvider(ABC):
         self._target_by_norm = {l.code.upper(): l.code for l in self.target_langs}
         self._target_by_name = {l.name.upper(): l.code for l in self.target_langs}
         workers = get_settings().get("providers", self.name, "max_workers")   # config.json override
+        rpm = get_settings().get("providers", self.name, "rpm")   # config.json override
+        if isinstance(rpm, int) and not isinstance(rpm, bool) and rpm >= 0:
+            self.rpm = rpm or None                                # 0 = no pacing
         if isinstance(workers, int) and not isinstance(workers, bool) and workers > 0:
             self.max_workers = workers
 

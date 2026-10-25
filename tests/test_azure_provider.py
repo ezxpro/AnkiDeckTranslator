@@ -39,7 +39,9 @@ def _provider(monkeypatch, script, langs=LANGS):
 
     patcher = patch("ankitool.providers.azure.urllib.request.urlopen", urlopen)
     patcher.start()
-    return AzureProvider(key="test"), calls, patcher
+    p = AzureProvider(key="test")
+    p.rate = float("inf")                      # tests must not wait for the rate limiter
+    return p, calls, patcher
 
 
 def test_registered_and_languages(monkeypatch):
@@ -85,7 +87,7 @@ def test_request_shape_and_result(monkeypatch):
     assert headers["ocp-apim-subscription-region"] == "brazilsouth"
     assert body == [{"Text": "ciao"}]
     assert res[0].text == "PT:ciao" and res[0].detected_source_lang == "IT"
-    assert p.usage() == "4 characters sent in this run"
+    assert p.usage().startswith("4 characters sent in this run")
 
 
 def test_tags_are_protected_and_restored(monkeypatch):

@@ -5,6 +5,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
+import time
 
 from ankitool.core.errors import ConfigError
 from ankitool.core.languages import NAMES, TARGETS
@@ -20,6 +22,12 @@ _AZURE_CODE = {"PT-BR": "pt", "PT-PT": "pt-pt", "EN-GB": "en", "EN-US": "en",
 _FROM_AZURE = {"pt": ["PT-BR"], "pt-pt": ["PT-PT"], "en": ["EN-GB", "EN-US"],
                "zh-Hans": ["ZH-HANS"], "zh-Hant": ["ZH-HANT"]}      # Azure code -> ankitool codes
 MAX_CHARS = 45_000                             # Azure accepts 50,000 characters per request
+# Characters per hour allowed by each tier. Azure wants them spread evenly over the hour
+# (F0: 2M/hour = ~33,300/min), so requests are paced instead of sent in bursts.
+TIER_CHARS_PER_HOUR = {"F0": 2_000_000, "S1": 40_000_000, "S2": 40_000_000,
+                       "S3": 120_000_000, "S4": 200_000_000}
+SAFETY = 0.9                                   # stay a little under the documented limit
+F0_MONTHLY_FREE = 2_000_000                    # free characters per month on F0
 
 
 def _warn(msg):
@@ -54,6 +62,13 @@ class AzureProvider(TranslationProvider):
             _warn("Warning: AZURE_REGION is not set. Regional and multi-service Azure resources need it "
                   "(it is shown next to the key in the Azure portal); without it requests usually fail "
                   "with HTTP 401. Add AZURE_REGION=<region> to .env.")
+        self.tier = (setting("AZURE_TIER") or provider_option(self.name, "tier") or "F0").upper()   # NEW
+        if self.tier not in TIER_CHARS_PER_HOUR:                                                     # NEW
+            raise ConfigError(f"AZURE_TIER must be one of {', '.join(TIER_CHARS_PER_HOUR)}: {self.tier}")  # NEW
+        self.rate = TIER_CHARS_PER_HOUR[self.tier] / 3600 * SAFETY     # characters per second       # NEW
+        self._lock = threading.Lock()          # shared by all workers (counter + pacing)             # NEW
+        self._next_slot = 0.0                  # time.monotonic() when the next request may start    # NEW
+        super().__init__(key)
         super().__init__(key)
 
     def connect(self, key):
@@ -88,7 +103,11 @@ class AzureProvider(TranslationProvider):
         return self._codes.get(c.upper(), c.lower())
 
     def usage(self):
-        return f"{self.chars} characters sent in this run"
+        msg = f"{self.chars} characters sent in this run"
+        if self.tier == "F0":
+            msg += (f" ({self.chars / F0_MONTHLY_FREE:.1%} of the F0 free quota of 2M/month; "
+                    "earlier runs are not counted)")
+        return msg
 
     # Azure's documented way to skip a piece of HTML is class="notranslate".
     def mask(self, t):
@@ -109,6 +128,20 @@ class AzureProvider(TranslationProvider):
         if chunk:
             yield chunk
 
+    def _throttle(self, n):
+        """Reserves n characters in the shared schedule and sleeps until the slot starts."""
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_slot)
+            self._next_slot = start + n / self.rate
+        if start > now:
+            time.sleep(start - now)
+
+    def _pause(self, seconds):
+        """After a 429 all workers wait, not only the one that received it."""
+        with self._lock:
+            self._next_slot = max(self._next_slot, time.monotonic() + seconds)
+            
     def _post(self, texts, target, source, html):
         query = {"api-version": "3.0", "to": self._code(target)}
         if source:
@@ -130,7 +163,10 @@ class AzureProvider(TranslationProvider):
                     wait = min(max(1, round(float(e.headers.get("Retry-After", "")))), 120)
                 except ValueError:
                     wait = self.rate_limit_wait
-                raise _Retryable("Azure rate limit reached (HTTP 429)", wait) from e
+                body = e.read()[:150].decode("utf-8", "replace") if e.fp else ""
+                self._pause(wait)
+                raise _Retryable("Azure rate limit reached (HTTP 429)" + (f": {body}" if body else ""),
+                                 wait) from e
             if e.code >= 500:
                 raise _Retryable(f"Azure server error (HTTP {e.code})") from e
             detail = e.read()[:200].decode("utf-8", "replace") if e.fp else ""
@@ -143,6 +179,7 @@ class AzureProvider(TranslationProvider):
     def _translate(self, texts, target_lang, source_lang, html):
         out = []
         for chunk in self._chunks(texts):
+            self._throttle(sum(len(t) for t in chunk))
             data = self._post(chunk, target_lang, source_lang, html)
             try:
                 for item in data:
@@ -150,7 +187,8 @@ class AzureProvider(TranslationProvider):
                     out.append(TranslationResult(item["translations"][0]["text"], lang_base(det) or None))
             except (KeyError, IndexError, TypeError, AttributeError) as e:
                 raise ConfigError("Azure returned an unexpected reply format") from e
-            self.chars += sum(len(t) for t in chunk)
+            with self._lock:
+                self.chars += sum(len(t) for t in chunk)
         if len(out) != len(texts):
             raise ConfigError(f"Azure returned {len(out)} translations for {len(texts)} texts")
         return out

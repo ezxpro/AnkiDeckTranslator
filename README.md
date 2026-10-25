@@ -94,6 +94,7 @@ Optional overrides (defaults built in; all can also go in `config.json`):
 | ------------------- | -------------------------------- | ------- |
 | `ANKITOOL_PROVIDER` | *(asks you)*                     | Service used when `--provider` is not given |
 | `AZURE_ENDPOINT`    | `https://api.cognitive.microsofttranslator.com` | Another Azure endpoint (https only) |
+| `AZURE_TIER`        | `F0`                             | Azure plan (F0, S1, S2, S3, S4); sets the request pace |
 | `GEMINI_MODEL`      | `gemini-flash-lite-latest`       | Gemini model |
 | `GROQ_MODEL`        | `openai/gpt-oss-20b`             | Groq model |
 | `GROQ_BASE_URL`     | `https://api.groq.com/openai/v1` | Groq endpoint |
@@ -158,6 +159,14 @@ Regional and multi-service resources need `AZURE_REGION`; only a *global* resour
 it, so ankitool prints a warning at startup when it is empty. `[sound:...]` references and cloze
 markers are protected, and large batches are split to stay under Azure's per-request limit.
 `429` rate limits are waited out and retried like with the other services.
+
+**Limits.** Azure limits characters per hour by tier (F0: 2M/hour, S1/S2: 40M, S3: 120M, S4: 200M)
+and expects them to be spread evenly, so F0 allows roughly 33,300 characters per minute. ankitool
+paces all requests to ~90% of that (about 30,000/min on F0, so 265,000 characters take around
+9 minutes). After a `429` every worker waits together. Set `AZURE_TIER` in `.env` if your plan
+is not F0. F0 also has a free quota of 2M characters per month: ankitool shows how much of it
+the current run used, but cannot know about earlier runs (the key does not expose account usage;
+check the Azure portal for the real total).
 
 ### LLMs
 

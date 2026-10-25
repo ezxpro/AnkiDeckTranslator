@@ -60,7 +60,7 @@ class LLMProvider(TranslationProvider):
     A subclass only implements connect() and _generate(system, payload) -> raw reply text,
     raising _Retryable (rate limit / server / network; may carry `wait`), _BadReply or ConfigError."""
 
-    batch_size = 25                            # smaller than MT services: keeps the JSON reply reliable
+    batch_size = 40                            # smaller than MT services: keeps the JSON reply reliable
     rate_limit_wait = 20                       # default seconds to wait after a rate limit
 
     @property

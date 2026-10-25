@@ -8,7 +8,8 @@ from ankitool.providers.gemini import GeminiProvider, _Retryable
 class FakeGemini(GeminiProvider):
     """Real parsing/batching/retry logic; only the SDK call is replaced by `script`.
     script(system, items) -> raw reply string (or raises). Every call is recorded."""
-
+    rpm = None                                 # no pacing in tests
+    
     def __init__(self, script):
         self.script, self.calls = script, []
         super().__init__(key="test")
@@ -132,4 +133,4 @@ def test_wait_is_reported_before_retry():
     p.on_wait = lambda seconds, why: seen.append((seconds, why))
     with patch("ankitool.providers.base.time.sleep") as sl:
         assert p.translate(["a"], "PT-BR")[0].text == "PT:a"
-    assert seen == [(20, "429")] and sl.call_args[0][0] == 20
+    assert seen == [(20, "429")] and sl.call_args_list[0][0][0] == 20

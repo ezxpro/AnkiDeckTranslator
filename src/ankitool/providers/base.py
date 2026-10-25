@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import time
+import time, threading
 from ankitool.core.settings import env_value
 
 from ankitool.core.errors import ConfigError
@@ -61,11 +61,14 @@ class TranslationProvider(ABC):
     batch_size = 40                            # texts per call
     retries = 3
     max_workers = 1                            # parallel calls; raise per provider if its limits allow
+    rpm = None                                 # max requests per minute (None = no pacing)
     transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
     hidden = False                             # True: only available with --provider, not in the menu
     on_wait = None                             # optional callback(seconds, reason) before a retry sleep
 
     def __init__(self, key=None):
+        self._lock = threading.Lock()          # shared by all workers (pacing + counters)
+        self._next_slot = 0.0                  # time.monotonic() when the next call may start
         self.key = key or load_secret(self.key_env, self.label)
         self.connect(self.key)
         self.target_langs = self.fetch_target_languages()
@@ -130,9 +133,26 @@ class TranslationProvider(ABC):
             res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
         return res
 
+    def _throttle(self, cost=0.0):
+        """Reserves a slot in the shared schedule and sleeps until it starts.
+        cost = seconds this call occupies (e.g. chars / rate); rpm sets a minimum."""
+        cost = max(cost, 60 / self.rpm if self.rpm else 0)
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_slot)
+            self._next_slot = start + cost
+        if start > now:
+            time.sleep(start - now)
+
+    def _pause(self, seconds):
+        """After a rate limit, ALL workers wait, not only the one that received it."""
+        with self._lock:
+            self._next_slot = max(self._next_slot, time.monotonic() + seconds)
+
     def wait(self, error):
         """Sleeps before a retry (the error may carry its own `wait` seconds) and reports it."""
         seconds = getattr(error, "wait", None) or 3
+        self._pause(seconds)
         if self.on_wait:
             self.on_wait(seconds, str(error) or type(error).__name__)
         time.sleep(seconds)

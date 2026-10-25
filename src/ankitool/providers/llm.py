@@ -71,6 +71,10 @@ class LLMProvider(TranslationProvider):
     def _generate(self, system, payload):
         """One call to the model; returns the raw reply text."""
 
+    def _call(self, system, payload):
+        self._throttle()                       # honours rpm and any pause after a 429
+        return self._generate(system, payload)
+
     # ---- languages ----
     def fetch_target_languages(self):
         return [Language(code, name) for code, name in TARGETS]
@@ -120,13 +124,13 @@ class LLMProvider(TranslationProvider):
         payload = json.dumps([{"id": i, "text": t} for i, t in enumerate(texts)], ensure_ascii=False)
         if len(texts) == 1:
             try:
-                return self._parse(self._generate(system, payload), 1, with_text)
+                return self._parse(self._call(system, payload), 1, with_text)
             except _BadReply as e:
                 raise _Retryable(str(e)) from e
         last = None
         for _ in range(2):
             try:
-                return self._parse(self._generate(system, payload), len(texts), with_text)
+                return self._parse(self._call(system, payload), len(texts), with_text)
             except _BadReply as e:
                 last = e
         mid = len(texts) // 2

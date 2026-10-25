@@ -66,9 +66,6 @@ class AzureProvider(TranslationProvider):
         if self.tier not in TIER_CHARS_PER_HOUR:                                                     # NEW
             raise ConfigError(f"AZURE_TIER must be one of {', '.join(TIER_CHARS_PER_HOUR)}: {self.tier}")  # NEW
         self.rate = TIER_CHARS_PER_HOUR[self.tier] / 3600 * SAFETY     # characters per second       # NEW
-        self._lock = threading.Lock()          # shared by all workers (counter + pacing)             # NEW
-        self._next_slot = 0.0                  # time.monotonic() when the next request may start    # NEW
-        super().__init__(key)
         super().__init__(key)
 
     def connect(self, key):
@@ -127,20 +124,6 @@ class AzureProvider(TranslationProvider):
             size += len(t)
         if chunk:
             yield chunk
-
-    def _throttle(self, n):
-        """Reserves n characters in the shared schedule and sleeps until the slot starts."""
-        with self._lock:
-            now = time.monotonic()
-            start = max(now, self._next_slot)
-            self._next_slot = start + n / self.rate
-        if start > now:
-            time.sleep(start - now)
-
-    def _pause(self, seconds):
-        """After a 429 all workers wait, not only the one that received it."""
-        with self._lock:
-            self._next_slot = max(self._next_slot, time.monotonic() + seconds)
             
     def _post(self, texts, target, source, html):
         query = {"api-version": "3.0", "to": self._code(target)}
@@ -179,7 +162,7 @@ class AzureProvider(TranslationProvider):
     def _translate(self, texts, target_lang, source_lang, html):
         out = []
         for chunk in self._chunks(texts):
-            self._throttle(sum(len(t) for t in chunk))
+            self._throttle(sum(len(t) for t in chunk) / self.rate)
             data = self._post(chunk, target_lang, source_lang, html)
             try:
                 for item in data:

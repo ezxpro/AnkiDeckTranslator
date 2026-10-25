@@ -22,6 +22,7 @@ class GeminiProvider(LLMProvider):
 
     name, label, key_env = "gemini", "Google Gemini", "GEMINI_KEY"
     max_workers = 1
+    rpm = 14                                   # free tier is 15 RPM; stay just under
 
     def __init__(self, key=None):
         self.model = (env_value("GEMINI_MODEL") or provider_option("gemini", "model")

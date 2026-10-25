@@ -11,5 +11,8 @@ def run_chunks(fn, chunks, workers, rep, on_result):
         for fut in as_completed(futures):
             rep.check_cancelled()
             on_result(futures[fut], fut.result())
+    except KeyboardInterrupt:
+        rep.cancel.cancel
+        raise
     finally:
         pool.shutdown(wait=True, cancel_futures=True)

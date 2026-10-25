@@ -29,6 +29,7 @@ class ProviderBenchmark:
         self.client, self.calls, self.batch = client, calls, batch
         self.workers, self.rep = sorted(set(workers)), rep or Reporter()
         client.on_wait = self.rep.waiting
+        client.cancel_event = self.rep.cancel.event
 
     def run(self, target, source="EN"):
         texts = [f"Hello world, this is test sentence number {i}." for i in range(self.batch)]

@@ -15,6 +15,10 @@ class CancelToken:
     @property
     def cancelled(self):
         return self._ev.is_set()
+    
+    @property
+    def event(self):
+        return self._ev
 
 class Reporter:
     """Feedback channel for the core. This base is silent (suitable for use as a library);

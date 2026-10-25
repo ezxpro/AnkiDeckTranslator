@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import time, threading
 from ankitool.core.settings import env_value
 
-from ankitool.core.errors import ConfigError
+from ankitool.core.errors import Cancelled, ConfigError
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.settings import get_settings
 from ankitool.core.text import TextTools
@@ -66,6 +66,7 @@ class TranslationProvider(ABC):
     transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
     hidden = False                             # True: only available with --provider, not in the menu
     on_wait = None                             # optional callback(seconds, reason) before a retry sleep
+    cancel_event = None                        # threading.Event set on cancel; wakes sleeping waits
 
     def __init__(self, key=None):
         self._lock = threading.Lock()          # shared by all workers (pacing + counters)
@@ -148,6 +149,13 @@ class TranslationProvider(ABC):
             res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
         return res
 
+    def _sleep(self, seconds):
+        """Sleeps, but wakes up at once (raising Cancelled) if the operation is cancelled."""
+        if self.cancel_event is None:
+            time.sleep(seconds)
+        elif self.cancel_event.wait(seconds):
+            raise Cancelled("Cancelled.")
+
     def _throttle(self, cost=0.0):
         """Reserves a slot in the shared schedule and sleeps until it starts.
         cost = seconds this call occupies (e.g. chars / rate); rpm sets a minimum."""
@@ -157,7 +165,7 @@ class TranslationProvider(ABC):
             start = max(now, self._next_slot)
             self._next_slot = start + cost
         if start > now:
-            time.sleep(start - now)
+            self._sleep(start - now)
 
     def _pause(self, seconds):
         """After a rate limit, ALL workers wait, not only the one that received it."""

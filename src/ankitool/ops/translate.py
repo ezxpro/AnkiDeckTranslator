@@ -122,35 +122,39 @@ class FieldTranslator:
         if dry_run:
             return est
         last_save = time.monotonic()
+        step = self.client.batch_size
+        jobs, total, done = [], {}, {}                   # one flat list of chunks across all pairs
         for (L, T), texts in todo.items():
             texts = sorted(texts)
-            step = self.client.batch_size
-            chunks = [texts[i:i + step] for i in range(0, len(texts), step)]
-            done = 0
+            total[(L, T)], done[(L, T)] = len(texts), 0
+            jobs += [(L, T, texts[i:i + step]) for i in range(0, len(texts), step)]
 
-            def on_result(chunk, res):
-                nonlocal done, last_save
-                if res is None:
-                    raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
-                                              f"(the cache keeps your progress).")
-                for src, r in zip(chunk, res):
-                    out = r.text
-                    if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
-                        self.view.write(T, L, src, out)
-                    else:
-                        self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
-                done += len(chunk)
-                if time.monotonic() - last_save >= 5:   # throttled: rewriting the file each chunk is O(n²)
-                    self.view.save()
-                    last_save = time.monotonic()
-                self.rep.log(f" [{L}->{T}] {done}/{len(texts)}")
+        def work(job):
+            L, T, chunk = job
+            return self.client.translate(chunk, target_lang=T, source_lang=L, protect_tags=True)
 
-            try:
-                run_chunks(lambda c: self.client.translate(c, target_lang=T, source_lang=L,
-                                                           protect_tags=True),
-                           chunks, self.client.max_workers, self.rep, on_result)
-            finally:
-                self.view.save()                        # keep everything translated so far, even on error/cancel                      # keep everything translated so far, even on error/cancel
+        def on_result(job, res):
+            nonlocal last_save
+            L, T, chunk = job
+            if res is None:
+                raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
+                                          f"(the cache keeps your progress).")
+            for src, r in zip(chunk, res):
+                out = r.text
+                if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
+                    self.view.write(T, L, src, out)
+                else:
+                    self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
+            done[(L, T)] += len(chunk)
+            if time.monotonic() - last_save >= 5:         # throttled: rewriting the file each chunk is O(n²)
+                self.view.save()
+                last_save = time.monotonic()
+            self.rep.log(f" [{L}->{T}] {done[(L, T)]}/{total[(L, T)]}")
+
+        try:
+            run_chunks(work, jobs, self.client.max_workers, self.rep, on_result)
+        finally:
+            self.view.save()                              # keep everything translated so far, even on error/cancel
         return est
 
 class TranslateOperation:

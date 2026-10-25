@@ -60,6 +60,7 @@ class TranslationProvider(ABC):
     default_target = "PT-BR"                   # suggested output language code
     batch_size = 40                            # texts per call
     retries = 3
+    max_rate_waits = 10                        # waits after a rate limit (don't use up `retries`)
     max_workers = 1                            # parallel calls; raise per provider if its limits allow
     rpm = None                                 # max requests per minute (None = no pacing)
     transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
@@ -123,15 +124,21 @@ class TranslationProvider(ABC):
         """Translates with retries; returns None if the service does not respond.
         protect_tags=True protects [sound:...] and {{c1::...}} (restored in the result)."""
         payload = [self.mask(t) for t in texts] if protect_tags else list(texts)
-        for attempt in range(self.retries):
+        failures = limited = 0
+        while True:
             try:
                 res = self._translate(payload, target_lang, source_lang, protect_tags)
                 break
             except self.transient_errors as e:
-                if attempt < self.retries - 1:
-                    self.wait(e)
-        else:
-            return None
+                if getattr(e, "wait", None):               # rate limit: its own budget
+                    limited += 1
+                    if limited > self.max_rate_waits:
+                        return None
+                else:
+                    failures += 1
+                    if failures >= self.retries:
+                        return None
+                self.wait(e)
         if protect_tags:
             res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
         return res

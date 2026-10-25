@@ -120,15 +120,12 @@ class TranslationProvider(ABC):
     def unmask(self, t):
         return TextTools.unmask(t)
 
-    def translate(self, texts, target_lang, source_lang=None, protect_tags=False):
-        """Translates with retries; returns None if the service does not respond.
-        protect_tags=True protects [sound:...] and {{c1::...}} (restored in the result)."""
-        payload = [self.mask(t) for t in texts] if protect_tags else list(texts)
+    def _retrying(self, call):
+        """Runs call() with the retry budgets (real failures vs rate limits); None if it never succeeds."""
         failures = limited = 0
         while True:
             try:
-                res = self._translate(payload, target_lang, source_lang, protect_tags)
-                break
+                return call()
             except self.transient_errors as e:
                 if getattr(e, "wait", None):               # rate limit: its own budget
                     limited += 1
@@ -138,7 +135,15 @@ class TranslationProvider(ABC):
                     failures += 1
                     if failures >= self.retries:
                         return None
-                self.wait(e)
+                self.wait(e)    
+
+    def translate(self, texts, target_lang, source_lang=None, protect_tags=False):
+        """Translates with retries; returns None if the service does not respond.
+        protect_tags=True protects [sound:...] and {{c1::...}} (restored in the result)."""
+        payload = [self.mask(t) for t in texts] if protect_tags else list(texts)
+        res = self._retrying(lambda: self._translate(payload, target_lang, source_lang, protect_tags))
+        if res is None:
+            return None
         if protect_tags:
             res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
         return res

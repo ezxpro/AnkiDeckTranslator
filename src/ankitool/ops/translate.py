@@ -7,12 +7,11 @@ import re
 
 from ankitool.anki.collection import AnkiCollection
 from ankitool.cache.translation import CacheView, DEFAULT_MODE
-from ankitool.core.constants import MIN_RATIO, SAMPLE
+from ankitool.core.pool import run_chunks
 from ankitool.core.constants import MIN_DETECT_CHARS, MIN_RATIO, SAMPLE
 from ankitool.core.errors import ConfigError, ProviderUnavailable
 from ankitool.core.progress import Reporter
 from ankitool.core.text import TextTools, lang_base
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 @dataclass
@@ -63,16 +62,20 @@ class FieldLanguageDetector:
         sent, reused = 0, sum(len(pick) for pick, _ in plan.values())
         if to_send:
             self.rep.log(f"detecting languages of {len(to_send)} new texts...")
-        for i in range(0, len(to_send), self.client.batch_size):   # 2) one batch across all fields
-            self.rep.check_cancelled()
-            chunk = to_send[i:i + self.client.batch_size]
-            langs = self.client.detect(chunk, self.target)
+        step = self.client.batch_size
+        chunks = [to_send[i:i + step] for i in range(0, len(to_send), step)]
+
+        def on_result(chunk, langs):
+            nonlocal sent
             if langs is None:
                 raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
                                           f"(the cache keeps your progress).")
             for p, lang in zip(chunk, langs):
                 self.cache.set_lang(p, lang, self.client.name)
             sent += len(chunk)
+
+        run_chunks(lambda c: self.client.detect(c, self.target), chunks,
+                   self.client.max_workers, self.rep, on_result)
         detected = {}
         for key, (pick, fresh) in plan.items():         # 3) majority language per field
             sample = pick + fresh
@@ -124,30 +127,30 @@ class FieldTranslator:
             step = self.client.batch_size
             chunks = [texts[i:i + step] for i in range(0, len(texts), step)]
             done = 0
-            pool = ThreadPoolExecutor(max_workers=self.client.max_workers)
+
+            def on_result(chunk, res):
+                nonlocal done, last_save
+                if res is None:
+                    raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
+                                              f"(the cache keeps your progress).")
+                for src, r in zip(chunk, res):
+                    out = r.text
+                    if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
+                        self.view.write(T, L, src, out)
+                    else:
+                        self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
+                done += len(chunk)
+                if time.monotonic() - last_save >= 5:   # throttled: rewriting the file each chunk is O(n²)
+                    self.view.save()
+                    last_save = time.monotonic()
+                self.rep.log(f" [{L}->{T}] {done}/{len(texts)}")
+
             try:
-                futures = {pool.submit(self.client.translate, c, target_lang=T,
-                                       source_lang=L, protect_tags=True): c for c in chunks}
-                for fut in as_completed(futures):       # cache/report only on the main thread
-                    self.rep.check_cancelled()
-                    chunk, res = futures[fut], fut.result()
-                    if res is None:
-                        raise ProviderUnavailable(f"{self.client.label} is unavailable; run again "
-                                                  f"(the cache keeps your progress).")
-                    for src, r in zip(chunk, res):
-                        out = r.text
-                        if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
-                            self.view.write(T, L, src, out)
-                        else:
-                            self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
-                    done += len(chunk)
-                    if time.monotonic() - last_save >= 5:   # throttled: rewriting the file each chunk is O(n²)
-                        self.view.save()
-                        last_save = time.monotonic()
-                    self.rep.log(f" [{L}->{T}] {done}/{len(texts)}")
+                run_chunks(lambda c: self.client.translate(c, target_lang=T, source_lang=L,
+                                                           protect_tags=True),
+                           chunks, self.client.max_workers, self.rep, on_result)
             finally:
-                pool.shutdown(wait=True, cancel_futures=True)
-                self.view.save()                        # keep everything translated so far, even on error/cancel
+                self.view.save()                        # keep everything translated so far, even on error/cancel                      # keep everything translated so far, even on error/cancel
         return est
 
 class TranslateOperation:

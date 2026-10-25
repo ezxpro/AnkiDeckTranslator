@@ -145,10 +145,4 @@ class LLMProvider(TranslationProvider):
 
     def detect(self, texts, target_lang):
         # A cheap classification call instead of a full translation.
-        for attempt in range(self.retries):
-            try:
-                return [lang for _, lang in self._batch(DETECT_PROMPT, list(texts), False)]
-            except self.transient_errors as e:
-                if attempt < self.retries - 1:
-                    self.wait(e)
-        return None
+        return self._retrying(lambda: [lang for _, lang in self._batch(DETECT_PROMPT, list(texts), False)])

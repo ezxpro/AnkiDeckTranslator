@@ -5,6 +5,7 @@ cache*.sqlite-journal
 deck_cache*.json
 *.tmp
 *.bak
+*.save
 
 # Anki packages
 *.apkg

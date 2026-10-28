@@ -21,6 +21,8 @@ Rules:
 - Keep every HTML tag and attribute exactly as in the input.
 - Keep every <span translate="no">...</span> element exactly as in the input, content included,
   and in the same place relative to the surrounding words. Do not translate its content.
+- Keep every placeholder such as ⟦0⟧ exactly as in the input, in the same place relative to the
+  surrounding words. Never translate, remove, duplicate or renumber a placeholder.
 - Do not change line breaks (<br>, newlines), URLs, file names or numbers.
 - If an item is already in {target}, return it unchanged.
 - Never add explanations, notes or quotation marks.
@@ -136,6 +138,33 @@ class LLMProvider(TranslationProvider):
         mid = len(texts) // 2
         return (self._batch(system, texts[:mid], with_text)
                 + self._batch(system, texts[mid:], with_text))
+
+    # ---- tag protection: markup never reaches the model, only numbered placeholders ----
+    _ATOM = r"<[^>]*>|\[sound:[^\]]+\]|\{\{c\d+::|\}\}"
+    _TOKEN = re.compile(rf"(?:{_ATOM})(?:\s*(?:{_ATOM}))*")      # adjacent markup = one placeholder
+    _HOLDER = re.compile(r"⟦(\d+)⟧")
+
+    def translate(self, texts, target_lang, source_lang=None, protect_tags=False):
+        if not protect_tags:
+            return super().translate(texts, target_lang, source_lang)
+        masked, saved = [], []
+        for t in texts:
+            tokens = []
+
+            def keep(m, tokens=tokens):
+                tokens.append(m.group(0))
+                return f"⟦{len(tokens) - 1}⟧"
+            masked.append(self._TOKEN.sub(keep, t))
+            saved.append(tokens)
+        res = super().translate(masked, target_lang, source_lang)
+        if res is None:
+            return None
+        return [TranslationResult(self._restore(r.text, tk), r.detected_source_lang)
+                for r, tk in zip(res, saved)]
+
+    def _restore(self, text, tokens):
+        return self._HOLDER.sub(
+            lambda m: tokens[int(m.group(1))] if int(m.group(1)) < len(tokens) else "", text)
     
     def _translate(self, texts, target_lang, source_lang, html):
         source = (f" The source language is {self._language_name(source_lang)}."

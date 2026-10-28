@@ -40,7 +40,7 @@ def test_translate_protects_tags_and_reports_language():
     p = FakeGemini(lambda s, i: _ok(i))
     res = p.translate(["ciao [sound:a.mp3] {{c1::casa}}"], "PT-BR", "IT", protect_tags=True)
     sent = p.calls[0][1][0]["text"]
-    assert '<span translate="no">[sound:a.mp3]</span>' in sent      # masked before the call
+    assert "⟦0⟧" in sent and "[sound:" not in sent                  # masked before the call
     assert res[0].text == "PT:ciao [sound:a.mp3] {{c1::casa}}"      # unmasked afterwards
     assert res[0].detected_source_lang == "IT"
     assert "Portuguese (Brazilian)" in p.calls[0][0] and "Italian" in p.calls[0][0]

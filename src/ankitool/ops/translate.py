@@ -143,10 +143,12 @@ class FieldTranslator:
                                           f"(the cache keeps your progress).")
             for src, r in zip(chunk, res):
                 out = r.text
-                if TextTools.PROT.findall(out) == TextTools.PROT.findall(src):
-                    self.view.write(T, L, src, out)
-                else:
+                if TextTools.shape(out) != TextTools.shape(src):
                     self.rep.warn(" damaged tag, keeping original:", TextTools.plain(src)[:50])
+                elif out.strip() == src.strip() and len(TextTools.plain(src).split()) >= 4:
+                    self.rep.warn(" returned unchanged, not cached:", TextTools.plain(src)[:50])
+                else:
+                    self.view.write(T, L, src, out)
             done[(L, T)] += len(chunk)
             if time.monotonic() - last_save >= 5:         # throttled: rewriting the file each chunk is O(n²)
                 self.view.save()

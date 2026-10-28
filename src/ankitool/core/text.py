@@ -4,7 +4,13 @@ import re
 class TextTools:
     PROT = re.compile(r"\[sound:[^\]]+\]|\{\{c\d+::|\}\}")
     WRAP = re.compile(r'<span translate="no">(.*?)</span>', re.S)
+    TAGS = re.compile(r"</?[A-Za-z][A-Za-z0-9]*")
 
+    @classmethod
+    def shape(cls, t):
+        """What must survive translation: markers in order, the multiset of HTML tags, and
+        balanced angle brackets (catches a dropped '>' as in '</li</ul>')."""
+        return (cls.PROT.findall(t), sorted(cls.TAGS.findall(t)), t.count("<"), t.count(">"))
 
     @classmethod
     def mask(cls, t):

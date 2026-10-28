@@ -18,7 +18,7 @@ class OpenAICompatProvider(LLMProvider):
     name, label, key_env = "openai", "OpenAI-compatible", "OPENAI_KEY"
     default_base_url, default_model = "https://api.openai.com/v1", "gpt-4o-mini"
     max_workers = 2
-    timeout = 60                                # seconds per request
+    timeout = 300                               # seconds per request
 
     def __init__(self, key=None):
         prefix = self.key_env.removesuffix("_KEY")

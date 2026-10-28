@@ -235,6 +235,7 @@ class Ui:
                     bad.append(tok)
             if picked and not bad and (multi or len(picked) == 1):
                 return sorted(picked)
+                return sorted(picked)
             if picked and not bad:
                 print("  Only one item can be chosen here. Type a single number.")
             else:
@@ -356,12 +357,19 @@ def read_key():
         tty.setraw(fd)
         ch = os.read(fd, 1).decode(errors="ignore")
         if ch == "\x1b":
-            seq = ""
-            while select.select([fd], [], [], 0.05)[0]:
-                seq += os.read(fd, 1).decode(errors="ignore")
+            if not select.select([fd], [], [], 0.1)[0]:
+                return "esc"                              # a real, lone Esc key
+            seq = os.read(fd, 1).decode(errors="ignore")
+            if seq in ("[", "O"):                         # arrow/function key: read only up to its final character
+                while True:
+                    nxt = os.read(fd, 1).decode(errors="ignore")
+                    seq += nxt
+                    if not nxt or nxt.isalpha() or nxt == "~":
+                        break
             return {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "[5~": "pgup",
                     "[6~": "pgdn", "[H": "home", "[F": "end", "[1~": "home", "[4~": "end",
-                    "OH": "home", "OF": "end"}.get(seq, "esc")
+                    "OH": "home", "OF": "end", "OA": "up", "OB": "down", "OC": "right",
+                    "OD": "left"}.get(seq, "")            # unknown keys are ignored, not treated as Esc
         if ch == "\x03":
             raise KeyboardInterrupt
         return {"\r": "enter", "\n": "enter", "\x7f": "backspace"}.get(ch, ch)

@@ -41,7 +41,71 @@ def make_provider(name):
                           f"Available: {', '.join(sorted(PROVIDERS))}")
     return PROVIDERS[name]()
 
-class TranslationProvider(ABC):
+class RetryPacing:
+    """Retries, request pacing (rpm) and cancellable waits. Shared by the translation services
+    and the speech services (ankitool.tts), so both react the same way to rate limits."""
+
+    retries = 3
+    max_rate_waits = 10                        # waits after a rate limit (don't use up `retries`)
+    rpm = None                                 # max requests per minute (None = no pacing)
+    transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
+    on_wait = None                             # optional callback(seconds, reason) before a retry sleep
+    cancel_event = None                        # threading.Event set on cancel; wakes sleeping waits
+
+    def _init_pacing(self):
+        self._lock = threading.Lock()          # shared by all workers (pacing + counters)
+        self._next_slot = 0.0                  # time.monotonic() when the next call may start
+
+    def _retrying(self, call):
+        """Runs call() with the retry budgets (real failures vs rate limits); None if it never succeeds."""
+        failures = limited = 0
+        while True:
+            try:
+                return call()
+            except self.transient_errors as e:
+                if getattr(e, "wait", None):               # rate limit: its own budget
+                    limited += 1
+                    if limited > self.max_rate_waits:
+                        return None
+                else:
+                    failures += 1
+                    if failures >= self.retries:
+                        return None
+                self.wait(e)
+
+    def _sleep(self, seconds):
+        """Sleeps, but wakes up at once (raising Cancelled) if the operation is cancelled."""
+        if self.cancel_event is None:
+            time.sleep(seconds)
+        elif self.cancel_event.wait(seconds):
+            raise Cancelled("Cancelled.")
+
+    def _throttle(self, cost=0.0):
+        """Reserves a slot in the shared schedule and sleeps until it starts.
+        cost = seconds this call occupies (e.g. chars / rate); rpm sets a minimum."""
+        cost = max(cost, 60 / self.rpm if self.rpm else 0)
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_slot)
+            self._next_slot = start + cost
+        if start > now:
+            self._sleep(start - now)
+
+    def _pause(self, seconds):
+        """After a rate limit, ALL workers wait, not only the one that received it."""
+        with self._lock:
+            self._next_slot = max(self._next_slot, time.monotonic() + seconds)
+
+    def wait(self, error):
+        """Sleeps before a retry (the error may carry its own `wait` seconds) and reports it."""
+        seconds = getattr(error, "wait", None) or 3
+        self._pause(seconds)
+        if self.on_wait:
+            self.on_wait(seconds, str(error) or type(error).__name__)
+        time.sleep(seconds)
+
+
+class TranslationProvider(RetryPacing, ABC):
     """The contract of a translation service. The rest of the program only knows this interface.
 
     To add another service (Google, Azure, LibreTranslate, ...):
@@ -59,18 +123,11 @@ class TranslationProvider(ABC):
     key_env = ""                               # environment variable / .env key name
     default_target = "PT-BR"                   # suggested output language code
     batch_size = 40                            # texts per call
-    retries = 3
-    max_rate_waits = 10                        # waits after a rate limit (don't use up `retries`)
     max_workers = 1                            # parallel calls; raise per provider if its limits allow
-    rpm = None                                 # max requests per minute (None = no pacing)
-    transient_errors = (ConnectionError, TimeoutError)   # errors worth retrying
     hidden = False                             # True: only available with --provider, not in the menu
-    on_wait = None                             # optional callback(seconds, reason) before a retry sleep
-    cancel_event = None                        # threading.Event set on cancel; wakes sleeping waits
 
     def __init__(self, key=None):
-        self._lock = threading.Lock()          # shared by all workers (pacing + counters)
-        self._next_slot = 0.0                  # time.monotonic() when the next call may start
+        self._init_pacing()
         self.key = key or load_secret(self.key_env, self.label)
         self.connect(self.key)
         self.target_langs = self.fetch_target_languages()
@@ -124,23 +181,6 @@ class TranslationProvider(ABC):
     def unmask(self, t):
         return TextTools.unmask(t)
 
-    def _retrying(self, call):
-        """Runs call() with the retry budgets (real failures vs rate limits); None if it never succeeds."""
-        failures = limited = 0
-        while True:
-            try:
-                return call()
-            except self.transient_errors as e:
-                if getattr(e, "wait", None):               # rate limit: its own budget
-                    limited += 1
-                    if limited > self.max_rate_waits:
-                        return None
-                else:
-                    failures += 1
-                    if failures >= self.retries:
-                        return None
-                self.wait(e)    
-
     def translate(self, texts, target_lang, source_lang=None, protect_tags=False):
         """Translates with retries; returns None if the service does not respond.
         protect_tags=True protects [sound:...] and {{c1::...}} (restored in the result)."""
@@ -151,37 +191,6 @@ class TranslationProvider(ABC):
         if protect_tags:
             res = [TranslationResult(self.unmask(r.text), r.detected_source_lang) for r in res]
         return res
-
-    def _sleep(self, seconds):
-        """Sleeps, but wakes up at once (raising Cancelled) if the operation is cancelled."""
-        if self.cancel_event is None:
-            time.sleep(seconds)
-        elif self.cancel_event.wait(seconds):
-            raise Cancelled("Cancelled.")
-
-    def _throttle(self, cost=0.0):
-        """Reserves a slot in the shared schedule and sleeps until it starts.
-        cost = seconds this call occupies (e.g. chars / rate); rpm sets a minimum."""
-        cost = max(cost, 60 / self.rpm if self.rpm else 0)
-        with self._lock:
-            now = time.monotonic()
-            start = max(now, self._next_slot)
-            self._next_slot = start + cost
-        if start > now:
-            self._sleep(start - now)
-
-    def _pause(self, seconds):
-        """After a rate limit, ALL workers wait, not only the one that received it."""
-        with self._lock:
-            self._next_slot = max(self._next_slot, time.monotonic() + seconds)
-
-    def wait(self, error):
-        """Sleeps before a retry (the error may carry its own `wait` seconds) and reports it."""
-        seconds = getattr(error, "wait", None) or 3
-        self._pause(seconds)
-        if self.on_wait:
-            self.on_wait(seconds, str(error) or type(error).__name__)
-        time.sleep(seconds)
 
     def resolve_target(self, raw):
         """Typed text -> valid output code (in the service's spelling), or None.

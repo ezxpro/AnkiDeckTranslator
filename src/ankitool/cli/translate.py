@@ -11,6 +11,22 @@ from ankitool.ops.rename import DeckRenamer, RenameConfig
 from ankitool.ops.translate import TranslateConfig, TranslateOperation
 
 
+def show_detected(op, detected):
+    """The language found in each field (shared by 'translate' and 'audio'); op has .anki and .cfg."""
+    print("\n=== Language I found in each field ===")
+    print("(I looked at some cards of each field and guessed the language. "
+          "The % shows how sure I am.)")
+    cur = None
+    for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0][0]):
+        if mid != cur:
+            print(f"\n{op.anki.model_names[mid]}")
+            cur = mid
+        ok = ratio >= op.cfg.min_ratio
+        label = paint(lang, "1;32") if ok else paint(f"{lang}? (uncertain)", "33")
+        pct = dim(f"({ratio:.0%})")
+        print(f" {f}: {label} {pct} e.g.: {dim(ex)}")
+
+
 class AnkiToolApp:
     """Coordinates the flow: questions -> import -> detect -> translate -> rename -> export."""
 
@@ -72,18 +88,7 @@ class AnkiToolApp:
         self.target = target
 
     def show_detected(self, op, detected):
-        print("\n=== Language I found in each field ===")
-        print("(I looked at some cards of each field and guessed the language. "
-              "The % shows how sure I am.)")
-        cur = None
-        for (mid, f), (lang, ratio, ex) in sorted(detected.items(), key=lambda kv: kv[0][0]):
-            if mid != cur:
-                print(f"\n{op.anki.model_names[mid]}")
-                cur = mid
-            ok = ratio >= op.cfg.min_ratio
-            label = paint(lang, "1;32") if ok else paint(f"{lang}? (uncertain)", "33")
-            pct = dim(f"({ratio:.0%})")
-            print(f" {f}: {label} {pct} e.g.: {dim(ex)}")
+        show_detected(op, detected)
 
     def ask_languages(self, op, detected):
         options, already = op.language_options(detected)

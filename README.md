@@ -204,6 +204,7 @@ commands. The main commands:
 
 ```
 ankitool translate deck.apkg            # translate the card text (and, optionally, deck names)
+ankitool audio    deck.apkg             # add spoken audio to the cards that have none
 ankitool reverse  deck.apkg             # swap the front and back of the cards (no translation)
 ankitool info      deck.apkg            # see note types, fields and decks (creates no file)
 ankitool langs                          # list the languages a service can translate into
@@ -215,6 +216,7 @@ ankitool bench                          # measure a service's speed / rate limit
 | Command | Purpose | Default output |
 | ------- | ------- | -------------- |
 | `translate` | Translate fields (and optionally deck names) | `<input>_out.apkg` |
+| `audio`     | Add spoken audio to notes that have none | `<input>_audio.apkg` |
 | `reverse`   | Swap front/back of cards (no translation) | `<input>_reversed.apkg` |
 | `info`      | Show note types, fields, and decks | *(no file)* |
 | `langs`     | List a service's target (or `--source`) languages | *(no file)* |
@@ -262,6 +264,49 @@ ankitool reverse deck.apkg [--notetype NAME] [--swap FIELD1=FIELD2]
 Swaps front/back by exchanging fields in the card templates (cloze types are excluded).
 Running it again undoes the change. `--swap` specifies which field pairs switch sides; `info`
 suggests pairs for each note type.
+
+### `audio`
+
+```
+ankitool audio deck.apkg --lang IT --dry-run     # count what would be generated, spend nothing
+ankitool audio deck.apkg --lang IT               # detect which fields are Italian, then generate
+ankitool audio deck.apkg --lang IT --field Word  # only the Word field (no language detection)
+ankitool audio deck.apkg --lang IT --voice it-IT-IsabellaNeural
+```
+
+Reads the text of the fields aloud with a speech service (`--speech`, currently Azure Speech) and
+appends the sound to the **same field** as `[sound:...]`, so it plays on whichever side of the card
+shows that text.
+
+- Only notes with **no `[sound:` in any field** are changed, so running it again on its own output
+  does nothing. Cloze notes are skipped (the audio would read the hidden answer; `--include-cloze`
+  overrides). Texts over `--max-chars` (default 400) are skipped.
+- Tags, `[sound:...]`, HTML entities and cloze markers are removed before reading; for a cloze the
+  answer is read and the hint is not.
+- Which fields are in the language you are learning is found the same way as in `translate`
+  (sampling, with a translation service chosen by `-p`), and you pick the language(s) to read. With
+  `--lang` **and** `--field` nothing is detected and no translation service is needed. With `-y`,
+  `--lang` is required: "all detected languages" would include your own.
+- Each audio file is kept in the `audio/` folder next to `cache.sqlite`, named by a hash of the
+  service, voice and text. A repeated text is requested once, and an interrupted run continues
+  where it stopped. Changing the voice generates new files.
+- Default voice per language is a neural voice from Azure's list; `--voice NAME` overrides it
+  (one language per run).
+
+**Azure Speech setup.** Create a **Speech** resource (or a multi-service one) in the Azure portal and
+put its key and region in `.env`. A Translator-only key does not work.
+
+```
+AZURE_SPEECH_KEY=your-key-here
+AZURE_SPEECH_REGION=brazilsouth
+AZURE_SPEECH_TIER=F0        # F0 (free, default) or S0 (paid)
+```
+
+**Limits.** The free tier F0 allows 20 requests per 60 seconds, so ankitool paces itself to 18 per
+minute (one request per audio file): about 3.5 s each, so 1,000 texts take roughly an hour. S0
+allows far more (paced at 600/min with 4 workers). `--dry-run` prints the estimate. Billing is per
+character; the free monthly quota is on Azure's pricing page, and `ankitool` only knows what the
+current run used. `429` responses are waited out and retried like with the translation services.
 
 ### `info`
 
@@ -764,10 +809,11 @@ examples:
 ```
 src/ankitool/
   core/        errors, constants, paths, progress (Reporter, CancelToken), languages (LLM language table), text helpers   (no I/O to the user)
-  providers/   base.py (contract + registry), deepl.py, azure.py, llm.py (shared LLM base), gemini.py, openai_compat.py, fake.py
-  cache/       translation.py: the one cache.sqlite for all services, its modes and views
+  providers/   base.py (contract + registry, RetryPacing), deepl.py, azure.py, llm.py (shared LLM base), gemini.py, openai_compat.py, fake.py
+  tts/         base.py (speech contract + registry), azure.py (Azure Speech): text to audio
+  cache/       translation.py: the one cache.sqlite for all services, its modes and views; audio.py: generated audio files
   anki/        collection.py: the only module that imports the `anki` package
-  ops/         translate / rename / reverse / bench: config dataclasses + operations, no print/input
+  ops/         translate / audio / rename / reverse / bench: config dataclasses + operations, no print/input
   cli/         console (Ui, ConsoleReporter, file picker), per-command apps, args, main
 ```
 

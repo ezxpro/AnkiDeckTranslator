@@ -1,6 +1,7 @@
 import sys
 
 from ankitool.cli.args import parse_args
+from ankitool.cli.audio import AudioApp
 from ankitool.cli.bench import BenchApp
 from ankitool.cli.cache import CacheApp
 from ankitool.cli.config import ConfigApp
@@ -23,6 +24,8 @@ MENU = {"1": ("translate", "Translate a deck",
               "The non-secret settings in config.json (provider, model, workers). No API keys."),
         "6": ("cache", "Translation cache",
               "Choose which saved translations each service reuses: shared or isolated. No API calls."),
+        "7": ("audio", "Add audio to cards",
+              "Reads the text of the cards aloud and attaches the sound to the same field. Only cards that have no audio."),
         "0": ("exit", "Quit", None)}
 
 # Menu entries that need extra positional args beyond their command name.
@@ -55,7 +58,9 @@ def main(argv=None):
 
             Ui.auto = getattr(opts, "yes", False)
 
-            if opts.command == "reverse":
+            if opts.command == "audio":
+                AudioApp(opts).run()
+            elif opts.command == "reverse":
                 ReverseApp(opts).run()
             elif opts.command == "info":
                 InfoApp(opts).run()

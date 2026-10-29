@@ -14,6 +14,8 @@ from ankitool.core.text import TextTools
 class AnkiCollection:
     """Imports the .apkg, exposes notes/fields, applies translations and exports."""
 
+    CLOZE = 1                                                  # Anki's note type kind for cloze
+
     def __init__(self, src, keep_scheduling=False, legacy=True, rep=None):
         self.rep = rep or Reporter()
         self.src = Path(src)
@@ -22,6 +24,7 @@ class AnkiCollection:
         self.tmp_dir = None
         self.notes = []
         self.model_names = {}                                  # mid -> note type name
+        self.cloze_mids = set()                                # note types of the cloze kind
         self.field_values = collections.defaultdict(list)      # (mid, field) -> values with text
 
     def _anki_progress(self):
@@ -61,7 +64,10 @@ class AnkiCollection:
         for n in track(self.rep, notes, "loading notes"):
             self.notes.append(n)
             if n.mid not in self.model_names:
-                self.model_names[n.mid] = n.note_type()["name"]
+                nt = n.note_type()
+                self.model_names[n.mid] = nt["name"]
+                if nt["type"] == self.CLOZE:
+                    self.cloze_mids.add(n.mid)
             for f, v in n.items():
                 if len(TextTools.plain(v)) >= 3:
                     self.field_values[(n.mid, f)].append(v)
@@ -98,6 +104,16 @@ class AnkiCollection:
         for i in range(0, len(changed), 500):                 # one backend call per chunk, not per note
             self.col.update_notes(changed[i:i + 500])
         self.rep.log(f"notes updated: {len(changed)}")
+
+    def add_media(self, name, data):
+        """Stores a file in the collection's media; returns the name Anki kept for it
+        (the same name unless a different file already uses it)."""
+        return self.col.media.write_data(name, data)
+
+    def update_notes(self, notes):
+        """Saves notes changed in place (one backend call per chunk, not per note)."""
+        for i in range(0, len(notes), 500):
+            self.col.update_notes(notes[i:i + 500])
 
     def deck_list(self):
         return [(d.id, d.name) for d in self.col.decks.all_names_and_ids(

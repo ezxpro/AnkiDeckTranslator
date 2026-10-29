@@ -6,10 +6,11 @@ import sys
 import textwrap
 
 from ankitool.cache.translation import MODES
-from ankitool.core.constants import DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
+from ankitool.core.constants import AUDIO_MAX_CHARS as MAX_CHARS, DEFAULT_PROVIDER, MIN_RATIO, SAMPLE, SEP, VERSION
 from ankitool.core.errors import ConfigError
 from ankitool.core.settings import configured_provider
 from ankitool.providers.base import PROVIDERS
+from ankitool.tts.base import SPEECH
 
 
 class WrapHelp(argparse.HelpFormatter):
@@ -44,7 +45,7 @@ def colorize(text):
     return "\n".join(out) + "\n"
 
 
-COMMANDS = ("translate", "reverse", "info", "langs", "bench", "config", "cache")
+COMMANDS = ("translate", "audio", "reverse", "info", "langs", "bench", "config", "cache")
 
 
 class FriendlyParser(argparse.ArgumentParser):
@@ -196,6 +197,50 @@ def parse_args(argv=None):
                         f"for the field to be considered reliable (default: {MIN_RATIO})")
     t.add_argument("--cache-dir", metavar="FOLDER",
                    help="folder for the cache files (default: the script's folder)")
+
+    a = sub.add_parser(
+        "audio", parents=[io, run_opts],
+        help="add spoken audio to notes that have none",
+        description="Generates audio from the text of the fields with a speech service (--speech) and "
+                    "appends it to the SAME field as [sound:...], so it plays on the side of the card "
+                    "that shows the text. Only notes with no [sound:] in any field are changed; cloze "
+                    "notes are skipped. Generated files are kept in the 'audio' folder of the cache "
+                    "folder, so a repeated text is never requested twice and an interrupted run "
+                    "continues where it stopped. Default output: <input>_audio.apkg.",
+        epilog="examples:\n"
+               "  ankitool audio deck.apkg --lang IT --dry-run     how much would be generated\n"
+               "  ankitool audio deck.apkg --lang IT               choose nothing else, detect fields\n"
+               "  ankitool audio deck.apkg --lang IT --field Word  only the Word field, no detection\n"
+               "  ankitool audio deck.apkg --lang IT --voice it-IT-IsabellaNeural",
+        formatter_class=WrapHelp)
+    a.add_argument("-s", "--speech", choices=sorted(SPEECH), default="azure", metavar="SERVICE",
+                   help=f"speech service: {', '.join(sorted(SPEECH))} (default: azure)")
+    a.add_argument("-p", "--provider", choices=sorted(PROVIDERS), metavar="SERVICE",
+                   help=f"translation service used only to detect each field's language "
+                        f"(default: {configured_provider() or DEFAULT_PROVIDER}); not needed with --lang and --field")
+    a.add_argument("-l", "--lang", metavar="CODE",
+                   help="language to read aloud, e.g. IT. Without it you are asked (required with -y)")
+    a.add_argument("--voice", metavar="NAME",
+                   help="voice to use instead of the default one for the language, e.g. it-IT-IsabellaNeural")
+    a.add_argument("--field", action="append", dest="only_fields", metavar="FIELD",
+                   help="add audio ONLY to this field (or NOTETYPE:FIELD); can be repeated. "
+                        "With --lang, the language is not detected")
+    a.add_argument("--skip-field", action="append", dest="skip_fields", metavar="FIELD",
+                   help="do NOT add audio to this field (or NOTETYPE:FIELD); can be repeated")
+    a.add_argument("--include-cloze", action="store_true",
+                   help="also add audio to cloze notes (it will read the hidden answer)")
+    a.add_argument("--max-chars", type=positive_int, default=MAX_CHARS, metavar="N",
+                   help=f"skip fields whose text is longer than N characters (default: {MAX_CHARS})")
+    a.add_argument("--dry-run", action="store_true",
+                   help="only counts what would be generated; creates no audio and no file "
+                        "(language detection still uses some characters)")
+    a.add_argument("--sample", type=positive_int, default=SAMPLE, metavar="N",
+                   help=f"how many texts from each field to use for language detection (default: {SAMPLE})")
+    a.add_argument("--min-ratio", type=ratio_type, default=MIN_RATIO, metavar="R",
+                   help=f"minimum fraction (0 to 1) of the sample that must agree on the language "
+                        f"(default: {MIN_RATIO})")
+    a.add_argument("--cache-dir", metavar="FOLDER",
+                   help="folder for cache.sqlite and the 'audio' folder (default: the script's folder)")
 
     r = sub.add_parser(
         "reverse", parents=[io, run_opts],
@@ -379,7 +424,16 @@ def parse_args(argv=None):
 
     opts = p.parse_args(argv)
 
-    if opts.command == "translate":
+    if opts.command == "audio":
+        for attr, flag in (("only_fields", "--field"), ("skip_fields", "--skip-field")):
+            specs = []
+            for item in getattr(opts, attr) or []:
+                nt, _, fld = item.rpartition(":")
+                if not fld.strip():
+                    a.error(f"{flag} invalid: '{item}'. Use FIELD or NOTETYPE:FIELD")
+                specs.append((nt.strip() or None, fld.strip()))
+            setattr(opts, attr, specs)
+    elif opts.command == "translate":
         opts.deck_names = {}
         for item in opts.deck_name or []:
             old, eq, new = item.partition("=")

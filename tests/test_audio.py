@@ -307,3 +307,22 @@ def test_audio_command_arguments():
     o = parse_args(["audio", "deck.apkg", "--lang", "IT", "--field", "Basic:Word", "--dry-run"])
     assert (o.command, o.speech, o.lang, o.only_fields, o.dry_run) == ("audio", "azure", "IT", [("Basic", "Word")], True)
     assert o.max_chars == 400 and not o.include_cloze
+
+def test_chosen_voice_is_used_for_its_language(tmp_path):
+    op = _op(tmp_path, [FakeNote(1, Word="il gatto")], voices={"IT": "it-other"})
+    op.prepare(CHOSEN)
+    assert op.items[0].voice.name == "it-other"
+
+
+def test_preview_is_generated_once_and_reused(tmp_path):
+    sp = FakeSpeech()
+    op = _op(tmp_path, [], speech=sp)
+    v = Voice("it-voice", "it")
+    assert op.preview("ciao", v) == op.preview("ciao", v)
+    assert len(sp.asked) == 1
+
+
+def test_sample_text_is_a_typical_real_value(tmp_path):
+    op = _op(tmp_path, [])
+    op.anki.field_values = {(1, "Word"): ["a b", "il gatto", "la casa grande"]}
+    assert op.sample_text(CHOSEN, "IT") == "il gatto"

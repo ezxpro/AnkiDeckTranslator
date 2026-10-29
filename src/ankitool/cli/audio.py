@@ -1,15 +1,42 @@
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 from ankitool.cache.audio import AudioCache
 from ankitool.cache.translation import TranslationCache
 from ankitool.cli.console import (ConsoleReporter, Ui, ask_input, ask_paths, choose_provider, dim)
 from ankitool.cli.translate import show_detected
-from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError
+from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError, ProviderUnavailable
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.text import lang_base
 from ankitool.ops.audio import AudioConfig, AudioOperation
 from ankitool.tts.base import make_speech
 
+
+def play(path):
+    """Plays the file right here with a command-line player if one is installed (ffplay, mpg123,
+    afplay); otherwise opens the system's default player. False if nothing could be started."""
+    for cmd in (["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"], ["mpg123", "-q"], ["afplay"]):
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.run([*cmd, str(path)], check=False)
+                return True
+            except OSError:
+                pass
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+        return True
+    except OSError:
+        return False
 
 class AudioApp:
     """audio command: import -> detect languages -> choose -> synthesize -> add to the notes -> export.
@@ -22,6 +49,7 @@ class AudioApp:
         self.cache_dir = (Path(opts.cache_dir).expanduser().resolve()
                           if opts.cache_dir else SCRIPT_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._tmp, self._played = None, 0
 
     def ask_languages(self, op, detected):
         options = op.language_options(detected)
@@ -41,6 +69,80 @@ class AudioApp:
         if idx is None:
             raise Cancelled("Cancelled.")
         return {options[i][0] for i in idx}
+
+    def choose_voices(self, op, speech, chosen):
+        """Per language: use the default voice, or (optionally) hear voices and choose one.
+        No questions with -y, --voice or --dry-run (the default voice is used).
+        Returns {language: voice name} only for the languages where another voice was chosen."""
+        if Ui.auto or self.opts.voice or self.opts.dry_run:
+            return {}
+        picks = {}
+        for lang in sorted(set(chosen.values())):
+            default = speech.resolve_voice(lang)
+            if Ui.choose(f"Voice for {lang}", {
+                    "1": f"Use the default voice ({default.name})",
+                    "2": ("Hear and choose a voice", "Listen to samples before deciding.")}, "1") == "1":
+                continue
+            voices = speech.voices_for(lang)
+            if not voices:
+                print(dim(f"\n{speech.label} gave no voice list for {lang}: the default voice is used."))
+                continue
+            picks[lang] = self.pick_voice(op, voices, default, lang, op.sample_text(chosen, lang))
+        return picks
+    def pick_voice(self, op, voices, default, lang, deck_sample):
+        print(f"\n=== Voice for {lang} ===")
+        for i, v in enumerate(voices, 1):
+            print(f" {i:>2}) {v.name:<34} {v.gender:<7}{'(default)' if v.name == default.name else ''}")
+        print(dim("Enter = default | N = choose | ?N = hear voice N | ?N PHRASE = hear it once with "
+                  "PHRASE | t PHRASE = use PHRASE as the sample | t = back to the deck's text"))
+        sample = deck_sample
+        while True:
+            print(dim(f"Sample: {sample or '(none: type  t YOUR PHRASE)'}"))
+            raw = input(f"Voice for {lang} [{default.name}]: ").strip()
+            if not raw:
+                return default.name
+            if raw.isdigit():
+                if 1 <= int(raw) <= len(voices):
+                    return voices[int(raw) - 1].name
+                print("  No such number.")
+                continue
+            m = re.fullmatch(r"\?\s*(\d+)(?:\s+(.+))?", raw, re.S)
+            if m:
+                n, text = int(m[1]), m[2] or sample
+                if not 1 <= n <= len(voices):
+                    print("  No such number.")
+                elif not text:
+                    print("  No sample yet: type  t YOUR PHRASE  first.")
+                else:
+                    self.hear(op, text, voices[n - 1])
+                continue
+            if raw.lower() == "t":
+                sample = deck_sample
+                continue
+            m = re.fullmatch(r"t\s+(.+)", raw, re.I | re.S)
+            if m:
+                sample = m[1]                      # as typed: no cleanup, no length limit
+                continue
+            hit = next((v for v in voices if v.name.lower() == raw.lower()), None)
+            if hit:
+                return hit.name
+            print("  Not understood.")
+
+    def hear(self, op, text, voice):
+        print(dim(f"  {voice.name}: {text}"))
+        try:
+            data = op.preview(text, voice)
+        except (ProviderUnavailable, ConfigError) as e:
+            print(f"  {e}")
+            return
+        self._tmp = self._tmp or tempfile.mkdtemp(prefix="ankitool_")
+        self._played += 1
+        path = Path(self._tmp) / f"preview{self._played}.{op.speech.extension}"
+        path.write_bytes(data)
+        if not play(path):
+            print(f"  Could not start a player. Open this file yourself: {path}")
+        elif self._played == 1:
+            print(dim(f"  If you hear nothing, the file is {path}"))
 
     def print_estimate(self, est, speech):
         print("\n=== Audio to generate ===")
@@ -94,7 +196,7 @@ class AudioApp:
                 picked = self.ask_languages(op, detected)
             chosen = op.plan(detected, picked)
             self.rep.log("chosen languages:", ", ".join(sorted(picked)), f"-> {len(chosen)} fields")
-
+            op.cfg.voices = self.choose_voices(op, speech, chosen)          
             est = op.prepare(chosen)
             self.print_estimate(est, speech)
             if dry:
@@ -111,3 +213,5 @@ class AudioApp:
             self.rep.log(f"{speech.label} usage:", speech.usage())
         finally:
             op.close()
+            if self._tmp:
+                shutil.rmtree(self._tmp, ignore_errors=True)

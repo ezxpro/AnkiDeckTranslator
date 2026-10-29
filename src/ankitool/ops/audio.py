@@ -1,3 +1,11 @@
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
 from dataclasses import dataclass, field
 import collections
 import re
@@ -14,6 +22,7 @@ from ankitool.ops.translate import FieldLanguageDetector
 @dataclass
 class AudioConfig:
     voice: str = None                                    # explicit voice name (needs a single language)
+    voices: dict = field(default_factory=dict)           # language -> voice name (chosen in the picker)
     only_fields: list = field(default_factory=list)      # [(note type|None, field)]
     skip_fields: list = field(default_factory=list)
     sample: int = SAMPLE
@@ -113,6 +122,24 @@ class AudioOperation:
         return {k: lang_base(l) for k, (l, r, _) in detected.items()
                 if lang_base(l) in picked and r >= self.cfg.min_ratio}
 
+    def sample_text(self, chosen, lang):
+        """A typical-length real value of a chosen field in `lang`, to preview voices with."""
+        texts = sorted({TextTools.speakable(v) for (mid, f), l in chosen.items() if l == lang
+                        for v in self.anki.field_values.get((mid, f), [])}, key=len)
+        texts = [t for t in texts if TextTools.has_letters(t) and len(t) <= 120]
+        return texts[len(texts) // 2] if texts else ""
+
+    def preview(self, text, voice):
+        """Audio bytes of `voice` reading `text`. Stored in the audio cache under the normal name,
+        so it is reused if the same text is generated later with the same voice."""
+        name = self.audio.filename(self.speech.name, voice.name, text, self.speech.extension)
+        if not self.audio.has(name):
+            data = self.speech.synthesize(text, voice)
+            if data is None:
+                raise ProviderUnavailable(f"{self.speech.label} is unavailable; try again.")
+            self.audio.write(name, data)
+        return self.audio.read(name)
+
     # ---- what would be generated ----
     def prepare(self, chosen):
         """Lists the fields that will get audio and what it takes. Nothing is spent here."""
@@ -121,7 +148,7 @@ class AudioOperation:
         if cfg.voice and len(langs) > 1:
             raise ConfigError(f"--voice names one voice but {len(langs)} languages were chosen "
                               f"({', '.join(langs)}). Choose a single language.")
-        voices = {l: self.speech.resolve_voice(l, cfg.voice) for l in langs}
+        voices = {l: self.speech.resolve_voice(l, cfg.voice or cfg.voices.get(l)) for l in langs}
         ext = self.speech.extension
         self.items, with_audio, cloze, too_long = [], 0, 0, 0
         for n in self.anki.notes:

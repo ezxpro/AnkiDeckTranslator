@@ -108,6 +108,15 @@ class SpeechProvider(RetryPacing, ABC):
         raise ConfigError(f"{self.label} has no voice for language {code}. "
                           f"Choose one with --voice NAME.")
 
+    def voices_for(self, lang):
+        """Voices that speak `lang` (e.g. 'PT'): the default locale first (pt-BR), then other
+        locales (pt-PT), the preferred voice at the top of each group. [] if no list."""
+        code = lang_base(lang)
+        default = self.DEFAULT_LOCALE.get(code)
+        pref = self.PREFERRED.get(default)
+        pool = [v for v in self.voices() if v.locale.upper().startswith(code + "-")]
+        return sorted(pool, key=lambda v: (v.locale != default, v.locale, v.name != pref, v.name))   
+
     def synthesize(self, text, voice):
         """Audio bytes with retries and pacing; None if the service never responds."""
         def call():

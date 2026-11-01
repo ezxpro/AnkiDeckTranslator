@@ -272,6 +272,8 @@ ankitool audio deck.apkg --lang IT --dry-run     # count what would be generated
 ankitool audio deck.apkg --lang IT               # detect which fields are Italian, then generate
 ankitool audio deck.apkg --lang IT --field Word  # only the Word field (no language detection)
 ankitool audio deck.apkg --lang IT --voice it-IT-IsabellaNeural
+ankitool audio deck.apkg --lang IT --rate=-15%   # 15% slower
+ankitool audio deck.apkg --lang EN --voice en-US-JennyNeural --style cheerful
 ```
 
 Reads the text of the fields aloud with a speech service (`--speech`, currently Azure Speech) and
@@ -292,6 +294,12 @@ shows that text.
   where it stopped. Changing the voice generates new files.
 - Default voice per language is a neural voice from Azure's list; `--voice NAME` overrides it
   (one language per run).
+- **Speed and style.** `--rate` changes the speed on any voice: a percentage (`--rate=-15%` slower,
+  `--rate=+10%` faster; use the `=` when it starts with `-`), a number (`0.9`) or `slow` / `medium` /
+  `fast`. `--style NAME` (e.g. `cheerful`, `friendly`, `chat`) only works on voices that have styles;
+  the voice list marks them `[styles: N]` and shows the names once you pick one. `[HD]` marks Azure's
+  high-definition voices. Defaults: `AZURE_SPEECH_RATE` / `AZURE_SPEECH_STYLE` (the flags win). The
+  Tab preview in the voice list uses them. A different rate or style generates new files.
 
 **Azure Speech setup.** Create a **Speech** resource (or a multi-service one) in the Azure portal and
 put its key and region in `.env`. A Translator-only key does not work.
@@ -300,6 +308,8 @@ put its key and region in `.env`. A Translator-only key does not work.
 AZURE_SPEECH_KEY=your-key-here
 AZURE_SPEECH_REGION=brazilsouth
 AZURE_SPEECH_TIER=F0        # F0 (free, default) or S0 (paid)
+# AZURE_SPEECH_RATE=-10%    # optional default speed
+# AZURE_SPEECH_STYLE=chat   # optional default style (voices that support it)
 ```
 
 **Limits.** The free tier F0 allows 20 requests per 60 seconds, so ankitool paces itself to 18 per

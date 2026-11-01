@@ -22,7 +22,9 @@ class AzureSpeechProvider(SpeechProvider):
     Settings (environment variable or .env):
       AZURE_SPEECH_KEY     (required; AZURE_KEY is used if it is a multi-service resource key)
       AZURE_SPEECH_REGION  (required, e.g. brazilsouth; AZURE_REGION is the fallback)
-      AZURE_SPEECH_TIER    F0 (free, default) or S0 (paid): sets the request pacing"""
+      AZURE_SPEECH_TIER    F0 (free, default) or S0 (paid): sets the request pacing
+      AZURE_SPEECH_RATE    (optional) default speaking speed, e.g. -15% (also providers.azure-speech.rate)
+      AZURE_SPEECH_STYLE   (optional) default speaking style, e.g. friendly (also providers.azure-speech.style)"""
 
     name, label, key_env = "azure", "Azure Speech", "AZURE_SPEECH_KEY"
     config_name = "azure-speech"               # config.json: providers.azure-speech.{max_workers,rpm,region,tier}
@@ -69,6 +71,11 @@ class AzureSpeechProvider(SpeechProvider):
         if self.tier == "F0":
             msg += " (the F0 monthly free quota is in the Azure portal; earlier runs are not counted)"
         return msg
+
+    def default_delivery(self):
+        def opt(env, key):
+            return str(setting(env) or provider_option(self.config_name, key) or "")
+        return Delivery(opt("AZURE_SPEECH_RATE", "rate"), opt("AZURE_SPEECH_STYLE", "style"))
     
     def _norm(self, delivery):
         """-> (rate, style), normalized and checked. ConfigError if the rate is not one SSML accepts."""
@@ -89,8 +96,9 @@ class AzureSpeechProvider(SpeechProvider):
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 data = json.load(r)
-            return [Voice(v["ShortName"], v["Locale"], v.get("Gender", "")) for v in data
-                    if v.get("Status", "GA") != "Deprecated"]
+            return [Voice(v["ShortName"], v["Locale"], v.get("Gender", ""),
+                          tuple(s for s in v.get("StyleList") or () if isinstance(s, str)))
+                    for v in data if v.get("Status", "GA") != "Deprecated"]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return []                          # resolve_voice falls back to its built-in table
 

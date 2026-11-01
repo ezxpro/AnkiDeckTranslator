@@ -211,7 +211,8 @@ def parse_args(argv=None):
                "  ankitool audio deck.apkg --lang IT --dry-run     how much would be generated\n"
                "  ankitool audio deck.apkg --lang IT               choose nothing else, detect fields\n"
                "  ankitool audio deck.apkg --lang IT --field Word  only the Word field, no detection\n"
-               "  ankitool audio deck.apkg --lang IT --voice it-IT-IsabellaNeural",
+               "  ankitool audio deck.apkg --lang IT --voice it-IT-IsabellaNeural\n"
+               "  ankitool audio deck.apkg --lang IT --rate=-15%",
         formatter_class=WrapHelp)
     a.add_argument("-s", "--speech", choices=sorted(SPEECH), default="azure", metavar="SERVICE",
                    help=f"speech service: {', '.join(sorted(SPEECH))} (default: azure)")
@@ -222,6 +223,13 @@ def parse_args(argv=None):
                    help="language to read aloud, e.g. IT. Without it you are asked (required with -y)")
     a.add_argument("--voice", metavar="NAME",
                    help="voice to use instead of the default one for the language, e.g. it-IT-IsabellaNeural")
+    a.add_argument("--rate", metavar="SPEED",
+                   help="speaking speed on any voice: a percentage (-15%% slower, +10%% faster), a number "
+                        "(0.9) or slow / medium / fast. Write it with '=' when it starts with '-': "
+                        "--rate=-15%%. Default: AZURE_SPEECH_RATE, else the voice's own speed")
+    a.add_argument("--style", metavar="NAME",
+                   help="speaking style, only for voices that have one (e.g. cheerful, friendly, chat); "
+                        "the voice list marks them [styles]. Default: AZURE_SPEECH_STYLE")
     a.add_argument("--field", action="append", dest="only_fields", metavar="FIELD",
                    help="add audio ONLY to this field (or NOTETYPE:FIELD); can be repeated. "
                         "With --lang, the language is not detected")

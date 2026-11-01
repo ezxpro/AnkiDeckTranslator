@@ -15,8 +15,7 @@ from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError, Provider
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.text import lang_base
 from ankitool.ops.audio import AudioConfig, AudioOperation
-from ankitool.tts.base import make_speech
-
+from ankitool.tts.base import Delivery, make_speech
 
 def play(path):
     """Plays the file right here with a command-line player if one is installed (ffplay, mpg123,
@@ -52,6 +51,7 @@ class AudioApp:
                           if opts.cache_dir else SCRIPT_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._tmp, self._played = None, 0
+        self.delivery = Delivery()
 
     def ask_languages(self, op, detected):
         options = op.language_options(detected)
@@ -98,17 +98,22 @@ class AudioApp:
         voices = [default] * (default.name not in {v.name for v in voices}) + list(voices)
         voices = sorted(voices, key=lambda v: v.name != default.name)      # default first, rest keep order
         labels = [f"{v.name}  {v.gender}" + ("  (default)" if v.name == default.name else "")
+                  + ("  [HD]" if v.hd else "") + (f"  [styles: {len(v.styles)}]" if v.styles else "")
                   for v in voices]
         if not _interactive():                      # no keyboard menu available: numbered list, no preview
             res = Ui.select(f"Voice for {lang}", labels, multi=False, default="first")
             res = None if res is None else res[0]
         else:
             res = menu(f"Voice for {lang}", labels, phrase="", phrase_default=deck_sample or "",
-                       intro="Enter = use the highlighted voice.",
+                       intro="Enter = use the highlighted voice. Speed (--rate) works on every voice; "
+                             "[styles] voices also take --style NAME.",
                        on_tab=lambda i, text: self.hear(op, text, voices[i]))
         if res is None:
             raise Cancelled("Cancelled.")
-        return voices[res].name
+        v = voices[res]
+        if v.styles:
+            print(dim(f"  {v.name} styles: {', '.join(v.styles)}. To use one: --style NAME"))
+        return v.name
 
     def hear(self, op, text, voice):
         """Plays `text` with `voice`. Returns an error message for the menu to show, or None."""
@@ -123,7 +128,7 @@ class AudioApp:
         if not play(path):
             return f"Could not start a player. Open this file yourself: {path}"
         return None
-        
+
     def print_estimate(self, est, speech):
         print("\n=== Audio to generate ===")
         print(f"Notes in the deck: {est.notes}")
@@ -133,6 +138,9 @@ class AudioApp:
         if est.too_long:
             print(f"  fields skipped, over the length limit (--max-chars): {est.too_long}")
         print(f"Fields that will get audio: {est.items}")
+        d = self.delivery
+        if d.rate or d.style:
+            print("Delivery: " + ", ".join(f"{k} {v}" for k, v in (("rate", d.rate), ("style", d.style)) if v))
         for lang, n in sorted(est.by_lang.items()):
             print(f"  {lang}: {n} distinct texts")
         new = est.texts - est.cached
@@ -146,6 +154,10 @@ class AudioApp:
         opts, dry = self.opts, self.opts.dry_run
         src, out = (ask_input(opts), None) if dry else ask_paths(opts, suffix="_audio")
         speech = make_speech(opts.speech)
+        base = speech.default_delivery()
+        self.delivery = Delivery(opts.rate if opts.rate is not None else base.rate,
+                                 opts.style if opts.style is not None else base.style)
+        speech.variant(self.delivery)         # rejects a bad --rate now, before any picker or quota is used
 
         langs = {lang_base(t) for t in (opts.lang or "").replace(";", ",").split(",") if t.strip()}
         fixed = bool(langs and opts.only_fields)          # language and fields given: nothing to detect
@@ -163,7 +175,7 @@ class AudioApp:
                           skip_fields=opts.skip_fields or [], sample=opts.sample,
                           min_ratio=opts.min_ratio, include_cloze=opts.include_cloze,
                           max_chars=opts.max_chars, keep_scheduling=opts.keep_scheduling,
-                          legacy=opts.legacy)
+                          legacy=opts.legacy,rate=self.delivery.rate, style=self.delivery.style)
         op = AudioOperation(speech, AudioCache(self.cache_dir / "audio"), cfg, self.rep, client, cache)
         try:
             op.open(src)

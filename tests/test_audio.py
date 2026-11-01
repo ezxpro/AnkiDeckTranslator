@@ -119,6 +119,26 @@ def test_azure_delivery_in_ssml_and_variant(clean_env):
     finally:
         patcher.stop()
 
+def test_azure_voice_markers_and_default_delivery(clean_env, monkeypatch):
+    for n in ("AZURE_SPEECH_RATE", "AZURE_SPEECH_STYLE"):
+        monkeypatch.delenv(n, raising=False)
+    extra = VOICES + [
+        {"ShortName": "en-US-JennyNeural", "Locale": "en-US", "Gender": "Female", "Status": "GA",
+         "StyleList": ["chat", "cheerful"]},
+        {"ShortName": "en-US-Ava:DragonHDLatestNeural", "Locale": "en-US", "Gender": "Female", "Status": "GA"}]
+    p, _, patcher = _azure(lambda r, n: AUDIO, voices=extra)
+    try:
+        by = {v.name: v for v in p.voices()}
+        assert by["en-US-JennyNeural"].styles == ("chat", "cheerful") and not by["en-US-JennyNeural"].hd
+        assert by["en-US-Ava:DragonHDLatestNeural"].hd and by["en-US-Ava:DragonHDLatestNeural"].styles == ()
+        assert by["it-IT-ElsaNeural"].styles == () and not by["it-IT-ElsaNeural"].hd
+        assert p.default_delivery() == Delivery()
+        monkeypatch.setenv("AZURE_SPEECH_RATE", "-10%")
+        monkeypatch.setenv("AZURE_SPEECH_STYLE", "chat")
+        assert p.default_delivery() == Delivery("-10%", "chat")
+    finally:
+        patcher.stop()
+
 def test_voice_resolution(clean_env):
     p, _, patcher = _azure(lambda r, n: AUDIO)
     try:
@@ -353,6 +373,12 @@ def test_audio_command_arguments():
     o = parse_args(["audio", "deck.apkg", "--lang", "IT", "--field", "Basic:Word", "--dry-run"])
     assert (o.command, o.speech, o.lang, o.only_fields, o.dry_run) == ("audio", "azure", "IT", [("Basic", "Word")], True)
     assert o.max_chars == 400 and not o.include_cloze
+
+def test_audio_rate_and_style_flags():
+    o = parse_args(["audio", "deck.apkg", "--rate=-15%", "--style", "friendly"])
+    assert (o.rate, o.style) == ("-15%", "friendly")
+    o = parse_args(["audio", "deck.apkg"])
+    assert o.rate is None and o.style is None
 
 def test_chosen_voice_is_used_for_its_language(tmp_path):
     op = _op(tmp_path, [FakeNote(1, Word="il gatto")], voices={"IT": "it-other"})

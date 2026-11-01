@@ -26,6 +26,11 @@ class Voice:
     name: str                                  # the service's own id, e.g. it-IT-ElsaNeural
     locale: str                                # it-IT
     gender: str = ""
+    styles: tuple = ()                         # speaking styles it accepts (--style), if the service lists them
+
+    @property
+    def hd(self):
+        return "DragonHD" in self.name         # Azure's high-definition voices
 
 @dataclass(frozen=True)
 class Delivery:
@@ -83,6 +88,10 @@ class SpeechProvider(RetryPacing, ABC):
     def variant(self, delivery):
         """Cache-key text for what `delivery` changes in the audio; '' when it changes nothing."""
         return ""
+        
+    def default_delivery(self):
+        """Delivery from the service's own settings (environment, .env, config.json); none by default."""
+        return Delivery()
 
     # ---- common to all ----
     def voices(self):

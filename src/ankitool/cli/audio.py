@@ -8,10 +8,8 @@ from pathlib import Path
 
 from ankitool.cache.audio import AudioCache
 from ankitool.cache.translation import TranslationCache
-from ankitool.cli.console import (
-    ConsoleReporter, Ui, _interactive, _rows, ask_input, ask_paths,
-    choose_provider, dim, head, idx, num, paint, read_key
-)
+from ankitool.cli.console import (ConsoleReporter, Ui, _interactive, ask_input, ask_paths,
+                                  choose_provider, dim, menu)
 from ankitool.cli.translate import show_detected
 from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError, ProviderUnavailable
 from ankitool.core.paths import SCRIPT_DIR
@@ -74,59 +72,42 @@ class AudioApp:
         return {options[i][0] for i in idx}
 
     def choose_voices(self, op, speech, chosen):
-        """Per language: use the default voice, or (optionally) hear voices and choose one.
-        No questions with -y, --voice or --dry-run (the default voice is used).
+        """Per language: pick a voice from a list where each one can be heard (Tab). Enter on the first
+        item keeps the default voice. No questions with -y, --voice or --dry-run (default voice used).
         Returns {language: voice name} only for the languages where another voice was chosen."""
         if Ui.auto or self.opts.voice or self.opts.dry_run:
             return {}
         picks = {}
         for lang in sorted(set(chosen.values())):
             default = speech.resolve_voice(lang)
-            if Ui.choose(f"Voice for {lang}", {
-                    "1": f"Use the default voice ({default.name})",
-                    "2": ("Hear and choose a voice", "Listen to samples before deciding.")}, "1") == "1":
-                continue
             voices = speech.voices_for(lang)
             if not voices:
-                print(dim(f"\n{speech.label} gave no voice list for {lang}: the default voice is used."))
+                print(dim(f"\n{speech.label} returned no voice list for {lang}. Using the default voice "
+                          f"({default.name}). To force another one: --voice NAME."))
                 continue
-            picks[lang] = self.pick_voice(op, voices, default, lang, op.sample_text(chosen, lang))
+            if all(v.name == default.name for v in voices):
+                print(dim(f"\n{speech.label} has only one voice for {lang} ({default.name}). Using it."))
+                continue
+            name = self.pick_voice(op, voices, default, lang, op.sample_text(chosen, lang))
+            if name != default.name:
+                picks[lang] = name
         return picks
-    def pick_voice(self, op, voices, default, lang, deck_sample):
-        voices = sorted(voices, key=lambda v: v.name != default.name)      # default first, rest keep order
-        sample = deck_sample
-        custom = "Type a different phrase to hear..."
-        while True:
-            shown = " ".join((sample or "").split())[:80] or "(none yet)"
-            labels = [f"{v.name}  {v.gender}" + ("  (default)" if v.name == default.name else "")
-                      for v in voices]
-            res = Ui.select(f"Voice for {lang}", labels + [custom], multi=False, default="first",
-                            intro=f"Sample phrase: {shown}")
-            if res is None:
-                raise Cancelled("Cancelled.")
-            if res[0] == len(voices):
-                sample = self.ask_sample(sample)
-                continue
-            voice = voices[res[0]]
-            while True:
-                act = Ui.choose(voice.name, {
-                    "1": "Use this voice",
-                    "2": ("Hear it", f"Reads: {shown}" if sample else "You will be asked for a phrase."),
-                    "3": "Back to the voice list"}, "2")
-                if act == "1":
-                    return voice.name
-                if act == "3":
-                    break
-                if not sample:
-                    sample = self.ask_sample(sample)
-                if sample:
-                    shown = " ".join(sample.split())[:80]
-                    self.hear(op, sample, voice)
 
-    @staticmethod
-    def ask_sample(current):
-        raw = input("Type the phrase you want to hear (Enter keeps the current one): ").strip()
-        return raw or current
+    def pick_voice(self, op, voices, default, lang, deck_sample):
+        voices = [default] * (default.name not in {v.name for v in voices}) + list(voices)
+        voices = sorted(voices, key=lambda v: v.name != default.name)      # default first, rest keep order
+        labels = [f"{v.name}  {v.gender}" + ("  (default)" if v.name == default.name else "")
+                  for v in voices]
+        if not _interactive():                      # no keyboard menu available: numbered list, no preview
+            res = Ui.select(f"Voice for {lang}", labels, multi=False, default="first")
+            res = None if res is None else res[0]
+        else:
+            res = menu(f"Voice for {lang}", labels, phrase="", phrase_default=deck_sample or "",
+                       intro="Enter = use the highlighted voice.",
+                       on_tab=lambda i, text: self.hear(op, text, voices[i]))
+        if res is None:
+            raise Cancelled("Cancelled.")
+        return voices[res].name
 
     def hear(self, op, text, voice):
         print(dim(f"  {voice.name}: {text}"))

@@ -277,16 +277,47 @@ def _rows(text):
     return sum(max(1, -(-len(re.sub(r"\033\[[0-9;]*m", "", l)) // w)) for l in text.split("\n"))
 
 
+def _window(cost, top, pos, avail):
+    """Items top..end-1 that fit in `avail` rows while keeping item `pos` visible -> (top, end)."""
+    top = min(top, pos)
+    while True:
+        end, used = top, 0
+        while end < len(cost) and used + cost[end] <= avail:
+            used += cost[end]
+            end += 1
+        if pos < end or top >= pos:
+            return top, max(end, pos + 1)
+        top += 1
+
+
 def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=None,
-         tones=None, cancel=True):
+         tones=None, cancel=True, phrase=None, phrase_default="", on_tab=None):
     """Keyboard menu drawn in place. checked=None: choose one (Enter); checked=a set: tick several
     (Space) and confirm with Enter. Returns the index, the sorted ticked indices, or None if
-    cancelled (Esc). tones: colour code per item. hotkeys: {key: index}, choose at once (single only)."""
+    cancelled (Esc). tones: colour code per item. hotkeys: {key: index}, choose at once (single only).
+    Lists taller than the terminal scroll: only the items around the cursor are drawn.
+    phrase="" turns on a typing line: any character typed goes into it (Backspace deletes), and Tab
+    calls on_tab(index of the highlighted item, phrase or phrase_default) to hear it."""
     os.system("")                                       # enables ANSI codes on old Windows consoles
-    multi, n, msg, drawn = checked is not None, len(labels), "", 0
+    multi, n, msg, drawn, top = checked is not None, len(labels), "", 0, 0
+    cost = [1 + bool(descs and descs[i]) for i in range(n)]
     while True:
-        lines = [head(title)] + ([dim(intro)] if intro else [])
-        for i, lab in enumerate(labels):
+        top_lines = [head(title)] + ([dim(intro)] if intro else [])
+        if phrase is not None:
+            hint = " ".join(phrase_default.split())[:60]
+            top_lines.append(f"Phrase to hear: {phrase}_" if phrase else
+                             dim("Phrase to hear: type one here" + (f", or leave empty for: {hint}" if hint else "")))
+        foot = dim("Up/Down move   " + ("Space tick   a all/none   Enter confirm" if multi
+                                        else ("Type a phrase   Tab hear it   " if phrase is not None else "")
+                                        + "Enter select") + ("   Esc cancel" if cancel else ""))
+        # rows left for items: the terminal minus title, footer, two "more" markers, a message, the cursor line
+        avail = max(3, shutil.get_terminal_size().lines - _rows("\n".join(top_lines + [foot])) - 4)
+        top, end = _window(cost, top, pos, avail)
+        lines = list(top_lines)
+        if top > 0:
+            lines.append(dim(f"       ... {top} more above"))
+        for i in range(top, end):
+            lab = labels[i]
             code = tones[i] if tones else None
             box = (paint("[x]", "1;32") if i in checked else dim("[ ]")) + " " if multi else ""
             if i == pos:
@@ -295,8 +326,9 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
                 lines.append(f"   {box}" + (paint(lab, code) if code else lab))
             if descs and descs[i]:
                 lines.append(dim(f"       {descs[i]}"))
-        lines.append(dim("Up/Down move   " + ("Space tick   a all/none   Enter confirm" if multi
-                                              else "Enter select") + ("   Esc cancel" if cancel else "")))
+        if end < n:
+            lines.append(dim(f"       ... {n - end} more below"))
+        lines.append(foot)
         if msg:
             lines.append(paint(msg, "31"))
         text = "\n".join(lines)
@@ -304,10 +336,26 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
         drawn = _rows(text)
 
         key, msg, result, done = read_key(), "", None, False
-        if key == "up":
+        if phrase is not None and key == "\t":
+            text = phrase.strip() or phrase_default.strip()
+            if not text:
+                msg = "Type a phrase first, then press Tab."
+            else:
+                print(f"\033[{drawn}A\033[J", end="", flush=True)      # clear the menu, play, redraw below
+                drawn = 0
+                on_tab(pos, text)
+        elif phrase is not None and key == "backspace":
+            phrase = phrase[:-1]
+        elif phrase is not None and len(key) == 1 and key.isprintable():
+            phrase += key
+        elif key == "up":
             pos = (pos - 1) % n
         elif key == "down":
             pos = (pos + 1) % n
+        elif key == "pgup":
+            pos = max(0, pos - max(1, end - top - 1))
+        elif key == "pgdn":
+            pos = min(n - 1, pos + max(1, end - top - 1))
         elif key == "home":
             pos = 0
         elif key == "end":

@@ -24,7 +24,8 @@ def play(path):
     for cmd in (["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"], ["mpg123", "-q"], ["afplay"]):
         if shutil.which(cmd[0]):
             try:
-                subprocess.run([*cmd, str(path)], check=False)
+                subprocess.run([*cmd, str(path)], check=False, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
             except OSError:
                 pass
@@ -110,21 +111,19 @@ class AudioApp:
         return voices[res].name
 
     def hear(self, op, text, voice):
-        print(dim(f"  {voice.name}: {text}"))
+        """Plays `text` with `voice`. Returns an error message for the menu to show, or None."""
         try:
             data = op.preview(text, voice)
         except (ProviderUnavailable, ConfigError) as e:
-            print(f"  {e}")
-            return
+            return str(e)
         self._tmp = self._tmp or tempfile.mkdtemp(prefix="ankitool_")
         self._played += 1
         path = Path(self._tmp) / f"preview{self._played}.{op.speech.extension}"
         path.write_bytes(data)
         if not play(path):
-            print(f"  Could not start a player. Open this file yourself: {path}")
-        elif self._played == 1:
-            print(dim(f"  If you hear nothing, the file is {path}"))
-
+            return f"Could not start a player. Open this file yourself: {path}"
+        return None
+        
     def print_estimate(self, est, speech):
         print("\n=== Audio to generate ===")
         print(f"Notes in the deck: {est.notes}")

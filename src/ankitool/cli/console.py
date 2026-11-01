@@ -296,21 +296,38 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
     (Space) and confirm with Enter. Returns the index, the sorted ticked indices, or None if
     cancelled (Esc). tones: colour code per item. hotkeys: {key: index}, choose at once (single only).
     Lists taller than the terminal scroll: only the items around the cursor are drawn.
-    phrase="" turns on a typing line: any character typed goes into it (Backspace deletes), and Tab
-    calls on_tab(index of the highlighted item, phrase or phrase_default) to hear it."""
+    phrase="" turns on an editable typing line (Left/Right/Home/End/Backspace/Delete). Tab calls
+    on_tab(index of the highlighted item, phrase or phrase_default) to hear it; the menu stays on
+    screen while it plays. on_tab may return an error message to show under the menu."""
     os.system("")                                       # enables ANSI codes on old Windows consoles
     multi, n, msg, drawn, top = checked is not None, len(labels), "", 0, 0
     cost = [1 + bool(descs and descs[i]) for i in range(n)]
+    cur, status, pending = len(phrase or ""), "", None
+
+    def k(key, what, code="1;33"):
+        return paint(key, code) + " " + what
+
     while True:
         top_lines = [head(title)] + ([dim(intro)] if intro else [])
         if phrase is not None:
-            hint = " ".join(phrase_default.split())[:60]
-            top_lines.append(f"Phrase to hear: {phrase}_" if phrase else
-                             dim("Phrase to hear: type one here" + (f", or leave empty for: {hint}" if hint else "")))
-        foot = dim("Up/Down move   " + ("Space tick   a all/none   Enter confirm" if multi
-                                        else ("Type a phrase   Tab hear it   " if phrase is not None else "")
-                                        + "Enter select") + ("   Esc cancel" if cancel else ""))
-        # rows left for items: the terminal minus title, footer, two "more" markers, a message, the cursor line
+            cur = min(cur, len(phrase))
+            if phrase:
+                shown = phrase[:cur] + paint(phrase[cur:cur + 1] or " ", "7") + phrase[cur + 1:]
+            else:
+                hint = " ".join(phrase_default.split())[:60]
+                shown = paint(" ", "7") + " type a phrase here" + (f", or leave empty to use: {hint}" if hint else "")
+            top_lines.append(f"{head('Phrase to hear:')} {shown}")
+        parts = [k("Up/Down", "move")]
+        if multi:
+            parts += [k("Space", "tick"), k("a", "all/none"), k("Enter", "confirm", "1;32")]
+        else:
+            if phrase is not None:
+                parts += [k("Type", "a phrase"), k("Left/Right", "edit"), k("Tab", "hear it", "1;32")]
+            parts.append(k("Enter", "select", "1;32"))
+        if cancel:
+            parts.append(k("Esc", "cancel", "1;31"))
+        foot = "   ".join(parts)
+        # rows left for items: the terminal minus title, footer, two "more" markers, status/message, the cursor line
         avail = max(3, shutil.get_terminal_size().lines - _rows("\n".join(top_lines + [foot])) - 4)
         top, end = _window(cost, top, pos, avail)
         lines = list(top_lines)
@@ -329,25 +346,41 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
         if end < n:
             lines.append(dim(f"       ... {n - end} more below"))
         lines.append(foot)
+        if status:
+            lines.append(paint(status, "1;33"))
         if msg:
             lines.append(paint(msg, "31"))
         text = "\n".join(lines)
         print((f"\033[{drawn}A\033[J" if drawn else "") + text, flush=True)
         drawn = _rows(text)
 
+        if pending:                                     # the "Playing..." frame is on screen; now play
+            i, say = pending
+            pending, status = None, ""
+            msg = on_tab(i, say) or ""
+            continue
         key, msg, result, done = read_key(), "", None, False
         if phrase is not None and key == "\t":
-            text = phrase.strip() or phrase_default.strip()
-            if not text:
+            say = phrase.strip() or phrase_default.strip()
+            if not say:
                 msg = "Type a phrase first, then press Tab."
             else:
-                print(f"\033[{drawn}A\033[J", end="", flush=True)      # clear the menu, play, redraw below
-                drawn = 0
-                on_tab(pos, text)
+                status, pending = "Playing... (the first time it can take a few seconds)", (pos, say)
         elif phrase is not None and key == "backspace":
-            phrase = phrase[:-1]
+            if cur:
+                phrase, cur = phrase[:cur - 1] + phrase[cur:], cur - 1
+        elif phrase is not None and key == "delete":
+            phrase = phrase[:cur] + phrase[cur + 1:]
+        elif phrase is not None and key == "left":
+            cur = max(0, cur - 1)
+        elif phrase is not None and key == "right":
+            cur = min(len(phrase), cur + 1)
+        elif phrase is not None and key == "home":
+            cur = 0
+        elif phrase is not None and key == "end":
+            cur = len(phrase)
         elif phrase is not None and len(key) == 1 and key.isprintable():
-            phrase += key
+            phrase, cur = phrase[:cur] + key + phrase[cur:], cur + 1
         elif key == "up":
             pos = (pos - 1) % n
         elif key == "down":
@@ -383,7 +416,7 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
                       else labels[result])
             print(f"\033[{drawn}A\033[J" + head(title.split("\n")[0]) + dim("  ->  ") + answer, flush=True)
             return result
-
+            
 def read_key():
     """One key press: 'up','down','left','right','pgup','pgdn','home','end','enter','esc',
     'backspace', or the typed character."""
@@ -392,7 +425,7 @@ def read_key():
         ch = msvcrt.getwch()
         if ch in ("\x00", "\xe0"):                      # arrow/function keys come as two characters
             return {"H": "up", "P": "down", "K": "left", "M": "right", "I": "pgup",
-                    "Q": "pgdn", "G": "home", "O": "end"}.get(msvcrt.getwch(), "")
+                    "Q": "pgdn", "G": "home", "O": "end", "S": "delete"}.get(msvcrt.getwch(), "")
         if ch == "\x03":
             raise KeyboardInterrupt
         return {"\r": "enter", "\x1b": "esc", "\x08": "backspace"}.get(ch, ch)
@@ -403,7 +436,10 @@ def read_key():
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = os.read(fd, 1).decode(errors="ignore")
+        b = os.read(fd, 1)
+        if b and b[0] >= 0xC0:                            # UTF-8 lead byte: read the rest of the character
+            b += os.read(fd, 1 if b[0] < 0xE0 else 2 if b[0] < 0xF0 else 3)
+        ch = b.decode(errors="ignore")
         if ch == "\x1b":
             if not select.select([fd], [], [], 0.1)[0]:
                 return "esc"                              # a real, lone Esc key
@@ -414,7 +450,7 @@ def read_key():
                     seq += nxt
                     if not nxt or nxt.isalpha() or nxt == "~":
                         break
-            return {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "[5~": "pgup",
+            return {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "[5~": "pgup","[3~": "delete",
                     "[6~": "pgdn", "[H": "home", "[F": "end", "[1~": "home", "[4~": "end",
                     "OH": "home", "OF": "end", "OA": "up", "OB": "down", "OC": "right",
                     "OD": "left"}.get(seq, "")            # unknown keys are ignored, not treated as Esc

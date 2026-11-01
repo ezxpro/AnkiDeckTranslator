@@ -6,6 +6,7 @@ deck_cache*.json
 *.tmp
 *.bak
 *.save
+audio/
 
 # Anki packages
 *.apkg

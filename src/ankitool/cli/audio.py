@@ -8,7 +8,10 @@ from pathlib import Path
 
 from ankitool.cache.audio import AudioCache
 from ankitool.cache.translation import TranslationCache
-from ankitool.cli.console import (ConsoleReporter, Ui, ask_input, ask_paths, choose_provider, dim)
+from ankitool.cli.console import (
+    ConsoleReporter, Ui, _interactive, _rows, ask_input, ask_paths,
+    choose_provider, dim, head, idx, num, paint, read_key
+)
 from ankitool.cli.translate import show_detected
 from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError, ProviderUnavailable
 from ankitool.core.paths import SCRIPT_DIR
@@ -31,9 +34,9 @@ def play(path):
         if sys.platform.startswith("win"):
             os.startfile(path)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
+            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            subprocess.Popen(["xdg-open", str(path)])
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except OSError:
         return False
@@ -90,43 +93,40 @@ class AudioApp:
             picks[lang] = self.pick_voice(op, voices, default, lang, op.sample_text(chosen, lang))
         return picks
     def pick_voice(self, op, voices, default, lang, deck_sample):
-        print(f"\n=== Voice for {lang} ===")
-        for i, v in enumerate(voices, 1):
-            print(f" {i:>2}) {v.name:<34} {v.gender:<7}{'(default)' if v.name == default.name else ''}")
-        print(dim("Enter = default | N = choose | ?N = hear voice N | ?N PHRASE = hear it once with "
-                  "PHRASE | t PHRASE = use PHRASE as the sample | t = back to the deck's text"))
+        voices = sorted(voices, key=lambda v: v.name != default.name)      # default first, rest keep order
         sample = deck_sample
+        custom = "Type a different phrase to hear..."
         while True:
-            print(dim(f"Sample: {sample or '(none: type  t YOUR PHRASE)'}"))
-            raw = input(f"Voice for {lang} [{default.name}]: ").strip()
-            if not raw:
-                return default.name
-            if raw.isdigit():
-                if 1 <= int(raw) <= len(voices):
-                    return voices[int(raw) - 1].name
-                print("  No such number.")
+            shown = " ".join((sample or "").split())[:80] or "(none yet)"
+            labels = [f"{v.name}  {v.gender}" + ("  (default)" if v.name == default.name else "")
+                      for v in voices]
+            res = Ui.select(f"Voice for {lang}", labels + [custom], multi=False, default="first",
+                            intro=f"Sample phrase: {shown}")
+            if res is None:
+                raise Cancelled("Cancelled.")
+            if res[0] == len(voices):
+                sample = self.ask_sample(sample)
                 continue
-            m = re.fullmatch(r"\?\s*(\d+)(?:\s+(.+))?", raw, re.S)
-            if m:
-                n, text = int(m[1]), m[2] or sample
-                if not 1 <= n <= len(voices):
-                    print("  No such number.")
-                elif not text:
-                    print("  No sample yet: type  t YOUR PHRASE  first.")
-                else:
-                    self.hear(op, text, voices[n - 1])
-                continue
-            if raw.lower() == "t":
-                sample = deck_sample
-                continue
-            m = re.fullmatch(r"t\s+(.+)", raw, re.I | re.S)
-            if m:
-                sample = m[1]                      # as typed: no cleanup, no length limit
-                continue
-            hit = next((v for v in voices if v.name.lower() == raw.lower()), None)
-            if hit:
-                return hit.name
-            print("  Not understood.")
+            voice = voices[res[0]]
+            while True:
+                act = Ui.choose(voice.name, {
+                    "1": "Use this voice",
+                    "2": ("Hear it", f"Reads: {shown}" if sample else "You will be asked for a phrase."),
+                    "3": "Back to the voice list"}, "2")
+                if act == "1":
+                    return voice.name
+                if act == "3":
+                    break
+                if not sample:
+                    sample = self.ask_sample(sample)
+                if sample:
+                    shown = " ".join(sample.split())[:80]
+                    self.hear(op, sample, voice)
+
+    @staticmethod
+    def ask_sample(current):
+        raw = input("Type the phrase you want to hear (Enter keeps the current one): ").strip()
+        return raw or current
 
     def hear(self, op, text, voice):
         print(dim(f"  {voice.name}: {text}"))

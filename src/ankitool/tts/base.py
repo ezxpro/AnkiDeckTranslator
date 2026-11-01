@@ -27,6 +27,11 @@ class Voice:
     locale: str                                # it-IT
     gender: str = ""
 
+@dataclass(frozen=True)
+class Delivery:
+    """How the voice says the text (the service decides what each field means)."""
+    rate: str = ""                             # speaking speed, e.g. -15%
+    style: str = ""                            # speaking style, e.g. friendly
 
 _VOICE_NAME = re.compile(r"^(?P<locale>[a-z]{2,3}-[A-Za-z0-9]+)-[A-Za-z0-9-]+$")
 
@@ -67,12 +72,17 @@ class SpeechProvider(RetryPacing, ABC):
         """-> list of Voice the service offers; [] if the list cannot be fetched."""
 
     @abstractmethod
-    def _synthesize(self, text, voice):
+    def _synthesize(self, text, voice, delivery=None):
         """One call to the service -> audio bytes. Raise _Retryable (rate limit / server / network)
-        or ConfigError; may carry `wait`. Must count characters in self.chars."""
+        or ConfigError; may carry `wait`. Must count characters in self.chars.
+        `delivery` (a Delivery or None) is how to say it; ignore it if the service has no such options."""
 
     def usage(self):
         return f"{self.chars} characters synthesized in this run"
+
+    def variant(self, delivery):
+        """Cache-key text for what `delivery` changes in the audio; '' when it changes nothing."""
+        return ""
 
     # ---- common to all ----
     def voices(self):
@@ -117,9 +127,9 @@ class SpeechProvider(RetryPacing, ABC):
         pool = [v for v in self.voices() if v.locale.upper().startswith(code + "-")]
         return sorted(pool, key=lambda v: (v.locale != default, v.locale, v.name != pref, v.name))   
 
-    def synthesize(self, text, voice):
+    def synthesize(self, text, voice, delivery=None):
         """Audio bytes with retries and pacing; None if the service never responds."""
         def call():
             self._throttle()
-            return self._synthesize(text, voice)
+            return self._synthesize(text, voice, delivery)
         return self._retrying(call)

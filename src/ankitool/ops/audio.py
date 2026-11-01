@@ -17,6 +17,7 @@ from ankitool.core.pool import run_chunks
 from ankitool.core.progress import Reporter
 from ankitool.core.text import TextTools, lang_base
 from ankitool.ops.translate import FieldLanguageDetector
+from ankitool.tts.base import Delivery
 
 
 @dataclass
@@ -31,6 +32,8 @@ class AudioConfig:
     max_chars: int = MAX_CHARS
     keep_scheduling: bool = False
     legacy: bool = True
+    rate: str = ""                                       # speaking speed (--rate), e.g. -15%
+    style: str = ""                                      # speaking style (--style), e.g. friendly
 
 
 @dataclass
@@ -129,12 +132,19 @@ class AudioOperation:
         texts = [t for t in texts if TextTools.has_letters(t) and len(t) <= 120]
         return texts[len(texts) // 2] if texts else ""
 
+    def _delivery(self):
+        return Delivery(self.cfg.rate, self.cfg.style)
+
+    def _variant(self):
+        """Cache-key part for the configured delivery; '' for the default. Raises ConfigError on a bad rate."""
+        return self.speech.variant(self._delivery())
+
     def preview(self, text, voice):
         """Audio bytes of `voice` reading `text`. Stored in the audio cache under the normal name,
         so it is reused if the same text is generated later with the same voice."""
-        name = self.audio.filename(self.speech.name, voice.name, text, self.speech.extension)
+        name = self.audio.filename(self.speech.name, voice.name, text, self.speech.extension, self._variant())
         if not self.audio.has(name):
-            data = self.speech.synthesize(text, voice)
+            data = self.speech.synthesize(text, voice, self._delivery())
             if data is None:
                 raise ProviderUnavailable(f"{self.speech.label} is unavailable; try again.")
             self.audio.write(name, data)
@@ -150,6 +160,7 @@ class AudioOperation:
                               f"({', '.join(langs)}). Choose a single language.")
         voices = {l: self.speech.resolve_voice(l, cfg.voice or cfg.voices.get(l)) for l in langs}
         ext = self.speech.extension
+        variant = self._variant()                        # also rejects a bad rate before anything is spent
         self.items, with_audio, cloze, too_long = [], 0, 0, 0
         for n in self.anki.notes:
             pairs = list(n.items())
@@ -171,7 +182,7 @@ class AudioOperation:
                     continue
                 voice = voices[lang]
                 self.items.append(AudioItem(n, f, v, lang, voice, self.audio.filename(
-                    self.speech.name, voice.name, text, ext), text))
+                    self.speech.name, voice.name, text, ext, variant), text))
         unique = {it.name: it for it in self.items}
         by_lang = collections.Counter(it.lang for it in unique.values())
         self._est = AudioEstimate(
@@ -191,8 +202,8 @@ class AudioOperation:
             return 0
 
         def work(it):
-            return self.speech.synthesize(it.text, it.voice)
-
+            return self.speech.synthesize(it.text, it.voice, self._delivery())
+            
         def on_result(it, data):
             nonlocal done
             if data is None:

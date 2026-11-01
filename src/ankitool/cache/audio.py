@@ -10,9 +10,12 @@ class AudioCache:
         self.dir = Path(folder)
 
     @staticmethod
-    def filename(service, voice, text, ext="mp3"):
-        """Stable name; it is also the name of the media file inside the deck."""
-        digest = hashlib.sha1(f"{service}\0{voice}\0{text}".encode("utf-8")).hexdigest()[:20]
+    def filename(service, voice, text, ext="mp3", variant=""):
+        """Stable name; it is also the name of the media file inside the deck.
+        `variant` is how the voice delivers the text (speed, style). Empty = default delivery, which
+        keeps the name identical to the one before variants existed, so old caches stay valid."""
+        key = f"{service}\0{voice}\0{text}" + (f"\0{variant}" if variant else "")
+        digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:20]
         return f"ankitool_{digest}.{ext}"
 
     def path(self, name):

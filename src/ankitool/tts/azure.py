@@ -7,11 +7,12 @@ from xml.sax.saxutils import escape, quoteattr
 from ankitool.core.errors import ConfigError
 from ankitool.core.settings import provider_option
 from ankitool.providers.llm import _Retryable, setting
-from ankitool.tts.base import SpeechProvider, Voice, register_speech
+from ankitool.tts.base import Delivery, SpeechProvider, Voice, register_speech
 
 # Real-time REST limits: F0 allows 20 requests per 60 s (not adjustable); S0 starts at 30 per second.
 TIER_RPM = {"F0": 18, "S0": 600}               # paced a little under the documented limit
 TIER_WORKERS = {"F0": 1, "S0": 4}
+RATE = re.compile(r"[+-]?\d+(\.\d+)?%?|x-slow|slow|medium|fast|x-fast")     # SSML prosody rate values
 MIN_AUDIO_BYTES = 64                           # anything smaller is an error body, not audio
 
 
@@ -68,6 +69,19 @@ class AzureSpeechProvider(SpeechProvider):
         if self.tier == "F0":
             msg += " (the F0 monthly free quota is in the Azure portal; earlier runs are not counted)"
         return msg
+    
+    def _norm(self, delivery):
+        """-> (rate, style), normalized and checked. ConfigError if the rate is not one SSML accepts."""
+        delivery = delivery or Delivery()
+        rate, style = delivery.rate.strip().lower().replace(" ", ""), delivery.style.strip().lower()
+        if rate and not RATE.fullmatch(rate):
+            raise ConfigError(f"Invalid speaking rate '{delivery.rate}'. Use a percentage like -15% or +10%, "
+                              f"a number like 0.9, or slow / medium / fast.")
+        return rate, style
+
+    def variant(self, delivery):
+        rate, style = self._norm(delivery)
+        return ";".join(p for p in (f"rate={rate}" if rate else "", f"style={style}" if style else "") if p)
 
     def _fetch_voices(self):
         req = urllib.request.Request(f"{self.base}/voices/list", headers={
@@ -80,9 +94,16 @@ class AzureSpeechProvider(SpeechProvider):
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return []                          # resolve_voice falls back to its built-in table
 
-    def _synthesize(self, text, voice):
-        ssml = (f"<speak version='1.0' xml:lang={quoteattr(voice.locale)}>"
-                f"<voice name={quoteattr(voice.name)}>{escape(text)}</voice></speak>")
+    def _synthesize(self, text, voice, delivery=None):
+        rate, style = self._norm(delivery)
+        body = escape(text)
+        if rate:
+            body = f"<prosody rate={quoteattr(rate)}>{body}</prosody>"
+        if style:
+            body = f"<mstts:express-as style={quoteattr(style)}>{body}</mstts:express-as>"
+        ns = " xmlns:mstts='https://www.w3.org/2001/mstts'" if style else ""
+        ssml = (f"<speak version='1.0' xml:lang={quoteattr(voice.locale)}{ns}>"
+                f"<voice name={quoteattr(voice.name)}>{body}</voice></speak>")
         req = urllib.request.Request(f"{self.base}/v1", ssml.encode("utf-8"), {
             "Ocp-Apim-Subscription-Key": self.key, "Content-Type": "application/ssml+xml",
             "X-Microsoft-OutputFormat": self.output_format, "User-Agent": "ankitool"})

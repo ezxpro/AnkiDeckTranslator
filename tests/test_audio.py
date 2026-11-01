@@ -10,7 +10,7 @@ from ankitool.core.errors import ConfigError, ProviderUnavailable
 from ankitool.core.text import TextTools
 from ankitool.ops.audio import AudioConfig, AudioOperation
 from ankitool.tts.azure import AzureSpeechProvider
-from ankitool.tts.base import SPEECH, Voice
+from ankitool.tts.base import SPEECH, Delivery, Voice
 
 AUDIO = b"ID3" + b"\x00" * 100                   # long enough to count as audio
 
@@ -37,6 +37,13 @@ def test_audio_cache_name_is_stable_and_depends_on_voice(tmp_path):
     assert c.has(a) and c.read(a) == AUDIO
     assert [p.name for p in (tmp_path / "audio").iterdir()] == [a]     # no .tmp left behind
 
+def test_filename_variant_keeps_old_names_and_separates_deliveries():
+    base = AudioCache.filename("azure", "it-IT-ElsaNeural", "ciao")
+    assert base == AudioCache.filename("azure", "it-IT-ElsaNeural", "ciao", "mp3", "")
+    slow = AudioCache.filename("azure", "it-IT-ElsaNeural", "ciao", "mp3", "rate=-15%")
+    assert slow != base
+    assert slow != AudioCache.filename("azure", "it-IT-ElsaNeural", "ciao", "mp3", "rate=-30%")
+    assert slow == AudioCache.filename("azure", "it-IT-ElsaNeural", "ciao", "mp3", "rate=-15%")
 
 # ---- Azure Speech ----
 VOICES = [{"ShortName": "it-IT-ElsaNeural", "Locale": "it-IT", "Gender": "Female", "Status": "GA"},
@@ -94,6 +101,23 @@ def test_azure_registered_and_request_shape(clean_env):
     finally:
         patcher.stop()
 
+def test_azure_delivery_in_ssml_and_variant(clean_env):
+    p, calls, patcher = _azure(lambda r, n: AUDIO)
+    try:
+        voice = p.resolve_voice("IT")
+        p.synthesize("ciao", voice)
+        plain = calls[0].data.decode()
+        assert "prosody" not in plain and "mstts" not in plain
+        p.synthesize("ciao", voice, Delivery(rate="-15%", style="Friendly"))
+        body = calls[1].data.decode()
+        assert '<prosody rate="-15%">ciao</prosody>' in body
+        assert '<mstts:express-as style="friendly">' in body and "xmlns:mstts=" in body
+        assert p.variant(None) == "" and p.variant(Delivery()) == ""
+        assert p.variant(Delivery("-15%", "Friendly")) == "rate=-15%;style=friendly"
+        with pytest.raises(ConfigError):
+            p.variant(Delivery(rate="sloooow"))
+    finally:
+        patcher.stop()
 
 def test_voice_resolution(clean_env):
     p, _, patcher = _azure(lambda r, n: AUDIO)
@@ -223,9 +247,12 @@ class FakeSpeech:
     def resolve_voice(self, lang, override=None):
         return Voice(override or f"{lang.lower()}-voice", lang.lower())
 
-    def synthesize(self, text, voice):
+    def synthesize(self, text, voice, delivery=None):
         self.asked.append((text, voice.name))
         return None if self.fail else AUDIO + text.encode()
+
+    def variant(self, delivery):
+        return ""
 
 
 def _op(tmp_path, notes, cloze=(), speech=None, **cfg):
@@ -251,6 +278,25 @@ def test_only_notes_without_audio_get_audio_in_the_same_field(tmp_path):
     assert n_audio.f["Word"] == "la casa" and n_cloze.f["Word"] == "{{c1::cane}}"
     assert op.anki.media[name].startswith(b"ID3") and op.anki.saved == [n_new]
 
+class RateSpeech(FakeSpeech):
+    seen = None
+
+    def variant(self, delivery):
+        return f"rate={delivery.rate}" if delivery.rate else ""
+
+    def synthesize(self, text, voice, delivery=None):
+        self.seen = delivery
+        return super().synthesize(text, voice, delivery)
+
+
+def test_delivery_changes_the_media_name_and_reaches_the_service(tmp_path):
+    speech = RateSpeech()
+    op = _op(tmp_path, [FakeNote(1, Word="il gatto")], speech=speech, rate="-15%")
+    op.prepare(CHOSEN)
+    assert op.items[0].name == AudioCache.filename("fake", "it-voice", "il gatto", "mp3", "rate=-15%")
+    assert op.items[0].name != AudioCache.filename("fake", "it-voice", "il gatto")
+    op.synthesize()
+    assert speech.seen.rate == "-15%"
 
 def test_cloze_can_be_included(tmp_path):
     n = FakeNote(2, Word="{{c1::cane::animal}} corre")

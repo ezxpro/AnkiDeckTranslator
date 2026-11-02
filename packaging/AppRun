@@ -1,0 +1,20 @@
+#!/bin/sh
+# Inside a terminal: run directly. Double-clicked (no terminal): reopen in one.
+HERE="$(dirname "$(readlink -f "$0")")"
+BIN="$HERE/usr/bin/ankitool"
+if [ -t 0 ] || [ -t 1 ]; then
+  exec "$BIN" "$@"
+fi
+# Relaunch the AppImage file itself ($APPIMAGE): this mount disappears when we exit.
+SELF="${APPIMAGE:-$0}"
+export ANKITOOL_PAUSE=1
+for t in x-terminal-emulator gnome-terminal konsole xfce4-terminal kitty alacritty xterm; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  case "$t" in
+    gnome-terminal) exec "$t" -- "$SELF" "$@" ;;
+    xfce4-terminal) exec "$t" -x "$SELF" "$@" ;;
+    kitty) exec "$t" "$SELF" "$@" ;;
+    *) exec "$t" -e "$SELF" "$@" ;;
+  esac
+done
+exec "$BIN" "$@"   # no terminal emulator found

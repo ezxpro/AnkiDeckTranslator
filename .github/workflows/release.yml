@@ -107,7 +107,7 @@ jobs:
             mkdir -p AppDir/usr/bin
             cp dist/ankitool AppDir/usr/bin/ankitool
             cp packaging/ankitool.desktop packaging/ankitool.png AppDir/
-            printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/ankitool" "$@"\n' > AppDir/AppRun
+            cp packaging/AppRun AppDir/AppRun
             chmod +x AppDir/AppRun
             curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
             chmod +x appimagetool

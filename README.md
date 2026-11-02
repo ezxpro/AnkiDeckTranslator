@@ -1,5 +1,6 @@
 # Anki Deck Translator (`ankitool`)
-<img width="1254" height="1254" alt="ankitool logo" src="https://github.com/user-attachments/assets/e62c9816-f10c-4cc5-b719-b0be0b325dcf" />
+<img width="512" height="512" alt="ankitool" src="https://github.com/user-attachments/assets/85a67c78-e609-4b12-b8ea-dbd84e098608" />
+
 
 
 A command-line tool that **translates, reverses, and inspects Anki decks** (`.apkg` files)

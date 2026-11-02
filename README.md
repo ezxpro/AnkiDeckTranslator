@@ -1,4 +1,6 @@
 # Anki Deck Translator (`ankitool`)
+<img width="1254" height="1254" alt="ankitool logo" src="https://github.com/user-attachments/assets/e62c9816-f10c-4cc5-b719-b0be0b325dcf" />
+
 
 A command-line tool that **translates, reverses, and inspects Anki decks** (`.apkg` files)
 using any of several machine-translation services. It keeps your card structure intact and

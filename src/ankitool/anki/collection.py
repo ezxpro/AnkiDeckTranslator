@@ -117,7 +117,7 @@ class AnkiCollection:
 
     def deck_list(self):
         return [(d.id, d.name) for d in self.col.decks.all_names_and_ids(
-            skip_empty_default=True, include_filtered=False) if d.name != "Default"]
+            skip_empty_default=True, include_filtered=False)]
 
     def notetypes(self):
         return self.col.models.all()

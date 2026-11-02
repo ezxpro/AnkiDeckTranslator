@@ -235,7 +235,6 @@ class Ui:
                     bad.append(tok)
             if picked and not bad and (multi or len(picked) == 1):
                 return sorted(picked)
-                return sorted(picked)
             if picked and not bad:
                 print("  Only one item can be chosen here. Type a single number.")
             else:

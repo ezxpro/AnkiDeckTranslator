@@ -42,3 +42,25 @@ def test_damaged_tags_are_not_cached(tmp_path):
 def test_intact_tags_are_cached(tmp_path):
     cache = _run(tmp_path, lambda t: t.replace("ciao", "olá"))
     assert cache.get("PT-BR", "IT", SRC, "stub") == "olá [sound:a.mp3]"
+
+
+def test_detection_handles_undetected_texts_without_crash(tmp_path):
+    from ankitool.ops.translate import FieldLanguageDetector
+
+    class UndetectingClient:
+        name = "undetect"
+        label = "undetect"
+        batch_size = 10
+        max_workers = 1
+        default_target = "PT-BR"
+
+        def detect(self, texts, target):
+            return [None] * len(texts)
+
+    cache = TranslationCache(tmp_path / "cache.sqlite")
+    det = FieldLanguageDetector(UndetectingClient(), cache, "PT-BR", Reporter())
+    # Should not raise KeyError when provider returns None
+    result = det.detect({(1, "Front"): ["Some sample text without detectable language"]})
+    assert (1, "Front") not in result
+    cache.close()
+

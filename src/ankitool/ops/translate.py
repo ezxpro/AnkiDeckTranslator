@@ -84,7 +84,10 @@ class FieldLanguageDetector:
                 continue
             votes = collections.Counter()
             for p in sample:                            # longer texts weigh more
-                votes[lang_cache[p]] += len(p)
+                if p in lang_cache:
+                    votes[lang_cache[p]] += len(p)
+            if not votes:
+                continue
             lang, weight = votes.most_common(1)[0]
             ex = re.sub(r"\s+", " ", max(sample, key=len))[:45]
             detected[key] = (lang, weight / sum(votes.values()), ex)

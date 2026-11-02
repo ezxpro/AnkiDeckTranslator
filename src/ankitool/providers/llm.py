@@ -8,11 +8,6 @@ from ankitool.core.languages import NAMES, TARGETS, free_text, lookup
 from ankitool.core.text import lang_base
 from ankitool.providers.base import Language, TranslationProvider, TranslationResult, load_secret
 
-def fetch_source_languages(self):
-    # Sources are reported as base codes ("PT", not "PT-BR"), which is what detect() returns.
-    names = {lang_base(code): NAMES.get(lang_base(code)) or name for code, name in TARGETS}
-    return [Language(code, name) for code, name in sorted(names.items())]
-
 TRANSLATE_PROMPT = """You are a translation engine for flashcard (Anki) text.
 Translate the "text" of each input item into {target}.{source}
 

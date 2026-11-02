@@ -52,7 +52,8 @@ class CacheApp:
         print(f"Saved to {st.path}")
 
     def _show(self):
-        cache, stats = self._cache(), self._cache().stats()
+        cache = self._cache()
+        stats = cache.stats()
         print(f"=== Cache: {self.cache_dir / 'cache.sqlite'} ===")
         print("Mode per service (translate uses it unless --cache-mode is given):")
         for svc in visible_services():
@@ -61,6 +62,7 @@ class CacheApp:
         print(f"Total: {cache.count()} translations, {len(cache.lang)} text languages")
         print("\nChange it:  ankitool cache use SERVICE shared|provider|isolated")
         print("Menu:       ankitool cache select      (choose the service and mode from a list)")
+        cache.close()
 
     def _use(self):
         o = self.opts

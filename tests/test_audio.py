@@ -181,6 +181,22 @@ def test_rate_limit_is_waited_out_and_retried(clean_env):
         patcher.stop()
 
 
+def test_wait_wakes_up_on_cancel(clean_env):
+    import threading
+    from ankitool.core.errors import Cancelled
+
+    p, _, patcher = _azure(lambda r, n: AUDIO)
+    try:
+        ev = threading.Event()
+        ev.set()  # already cancelled
+        p.cancel_event = ev
+        with pytest.raises(Cancelled):
+            p.wait(urllib.error.HTTPError("u", 429, "x", {"Retry-After": "10"}, None))
+    finally:
+        patcher.stop()
+
+
+
 def test_server_errors_give_up_after_retries(clean_env):
     def script(req, n):
         raise _http(503)

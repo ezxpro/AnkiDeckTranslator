@@ -174,7 +174,7 @@ class AudioApp:
               f"(~{est.chars} characters in total)")
         if new and speech.rpm:
             print(f"At {speech.rpm} requests/min and {speech.max_workers} worker(s): "
-                  f"about {new / speech.rpm / max(speech.max_workers, 1):.0f} min.")
+                  f"about {new / speech.rpm:.0f} min.")
 
     def run(self):
         opts, dry = self.opts, self.opts.dry_run

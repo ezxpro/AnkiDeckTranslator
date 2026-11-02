@@ -75,3 +75,20 @@ def test_close_removes_temp_folder(deck):
     tmp = ac.tmp_dir
     ac.close()
     assert not tmp.exists()
+
+
+def test_deck_list_includes_non_empty_default(tmp_path):
+    path = tmp_path / "default_deck.apkg"
+    col = Collection(str(tmp_path / "build_default.anki2"))
+    model = col.models.by_name("Basic")
+    note = col.new_note(model)
+    note["Front"], note["Back"] = "One", "Two"
+    col.add_note(note, 1)  # Default deck
+    col.export_anki_package(out_path=str(path), options=ExportAnkiPackageOptions(
+        with_scheduling=False, with_deck_configs=False, with_media=True, legacy=True), limit=None)
+    col.close()
+
+    ac = load(path)
+    decks = [name for _, name in ac.deck_list()]
+    assert "Default" in decks
+    ac.close()

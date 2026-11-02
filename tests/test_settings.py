@@ -80,3 +80,11 @@ def test_provider_uses_config_but_env_wins():
             assert (p.model, p.base_url, p.max_workers) == ("cfg-model", "https://cfg.example.com/v1", 7)   
             with patch.dict("os.environ", {"GROQ_MODEL": "env-model"}):
                 assert GroqProvider(key="k").model == "env-model"
+
+
+def test_project_root_resolves_git_parent_regardless_of_cwd(tmp_path, monkeypatch):
+    from ankitool.core.paths import _project_root
+    monkeypatch.chdir(tmp_path)
+    root = _project_root()
+    assert (root / ".git").exists()
+

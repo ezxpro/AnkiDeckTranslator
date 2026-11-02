@@ -102,7 +102,7 @@ class RetryPacing:
         self._pause(seconds)
         if self.on_wait:
             self.on_wait(seconds, str(error) or type(error).__name__)
-        time.sleep(seconds)
+        self._sleep(seconds)
 
 
 class TranslationProvider(RetryPacing, ABC):

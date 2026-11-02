@@ -1,3 +1,4 @@
+from ankitool.core.errors import ConfigError
 from ankitool.providers.base import Language, TranslationProvider, TranslationResult, register_provider
 
 
@@ -6,7 +7,11 @@ class DeepLProvider(TranslationProvider):
     name, label, key_env = "deepl", "DeepL", "DEEPL_KEY"
 
     def connect(self, key):
-        import deepl                           # imported here: only DeepL users need it
+        try:
+            import deepl                           # imported here: only DeepL users need it
+        except ImportError as e:
+            raise ConfigError("DeepL needs the 'deepl' package. Install it with: "
+                              "pip install deepl   (or: pip install -e .[deepl])") from e
         self.tr = deepl.Translator(key)
         self.transient_errors = (deepl.ConnectionException,)
 

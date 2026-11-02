@@ -4,7 +4,7 @@ DEFAULT_PROVIDER = "deepl"
 
 SEP = "::"
 
-VERSION = "0.1.0"
+VERSION = "0.0.0.dev0"   # placeholder; CI stamps the release version from the git tag
 
 MIN_DETECT_CHARS = 12      # shorter texts are too ambiguous to detect reliably
 

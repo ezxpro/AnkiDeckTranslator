@@ -15,6 +15,18 @@ offers an interactive menu, so no command-line experience is required.
 - **Detects languages** automatically, with retries and respects rate limits
 ---
 
+## Download (no Python needed)
+
+Grab the latest build from the [Releases page](../../releases/latest):
+
+- **Windows:** download `ankitool-windows-x86_64.exe` and double-click it (or run it from a terminal).
+- **Linux (AppImage):** `chmod +x ankitool-linux-x86_64.AppImage && ./ankitool-linux-x86_64.AppImage`
+- **Linux (plain binary):** `tar -xzf ankitool-linux-x86_64.tar.gz && ./ankitool`
+
+Releases are created automatically from [Conventional Commits](https://www.conventionalcommits.org/)
+on `main`: `fix:` bumps the patch version, `feat:` the minor, `feat!:` / `BREAKING CHANGE` the major
+(before 1.0, breaking changes bump the minor). `docs:`/`chore:` alone do not release.
+
 ## Requirements
 
 - Python **3.9** or newer

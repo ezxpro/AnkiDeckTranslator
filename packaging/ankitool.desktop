@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ankitool
+Comment=Translate, reverse and inspect Anki decks
+Exec=ankitool
+Icon=ankitool
+Categories=Utility;Education;
+Terminal=true

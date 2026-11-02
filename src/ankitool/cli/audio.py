@@ -52,6 +52,7 @@ class AudioApp:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._tmp, self._played = None, 0
         self.delivery = Delivery()
+        self.styles = {}                      # language -> style chosen in the picker
 
     def ask_languages(self, op, detected):
         options = op.language_options(detected)
@@ -75,7 +76,8 @@ class AudioApp:
     def choose_voices(self, op, speech, chosen):
         """Per language: pick a voice from a list where each one can be heard (Tab). Enter on the first
         item keeps the default voice. No questions with -y, --voice or --dry-run (default voice used).
-        Returns {language: voice name} only for the languages where another voice was chosen."""
+        Returns {language: voice name} only for the languages where another voice was chosen;
+        the style chosen for each voice that has them goes to self.styles."""
         if Ui.auto or self.opts.voice or self.opts.dry_run:
             return {}
         picks = {}
@@ -89,10 +91,35 @@ class AudioApp:
             if all(v.name == default.name for v in voices):
                 print(dim(f"\n{speech.label} has only one voice for {lang} ({default.name}). Using it."))
                 continue
-            name = self.pick_voice(op, voices, default, lang, op.sample_text(chosen, lang))
-            if name != default.name:
-                picks[lang] = name
+            sample = op.sample_text(chosen, lang)
+            voice = self.pick_voice(op, voices, default, lang, sample)
+            if voice.name != default.name:
+                picks[lang] = voice.name
+            style = self.pick_style(op, voice, lang, sample)
+            if style is not None:
+                self.styles[lang] = style
         return picks
+
+    def pick_style(self, op, voice, lang, deck_sample):
+        """Second menu for voices that have speaking styles; each can be heard (Tab). Skipped when
+        --style was given (the flag wins). The default style (AZURE_SPEECH_STYLE) starts highlighted.
+        Returns the style name, "" for no style, or None when there is nothing to choose."""
+        if not voice.styles or self.opts.style is not None:
+            return None
+        labels = ["(no style)"] + list(voice.styles)
+        by_name = {s.lower(): i for i, s in enumerate(labels)}
+        pos = by_name.get(self.delivery.style.lower(), 0) if self.delivery.style else 0
+        title = f"Style for {voice.name} ({lang})"
+        if not _interactive():
+            res = Ui.select(title, labels, multi=False, default="first")
+            res = None if res is None else res[0]
+        else:
+            res = menu(title, labels, pos=pos, phrase="", phrase_default=deck_sample or "",
+                       intro="Enter = use the highlighted style. Tab plays it. Same as --style NAME.",
+                       on_tab=lambda i, text: self.hear(op, text, voice, "" if i == 0 else labels[i]))
+        if res is None:
+            raise Cancelled("Cancelled.")
+        return "" if res == 0 else labels[res]
 
     def pick_voice(self, op, voices, default, lang, deck_sample):
         voices = [default] * (default.name not in {v.name for v in voices}) + list(voices)
@@ -106,19 +133,17 @@ class AudioApp:
         else:
             res = menu(f"Voice for {lang}", labels, phrase="", phrase_default=deck_sample or "",
                        intro="Enter = use the highlighted voice. Speed (--rate) works on every voice; "
-                             "[styles] voices also take --style NAME.",
+                             "[styles] voices let you pick a speaking style next.",
                        on_tab=lambda i, text: self.hear(op, text, voices[i]))
         if res is None:
             raise Cancelled("Cancelled.")
-        v = voices[res]
-        if v.styles:
-            print(dim(f"  {v.name} styles: {', '.join(v.styles)}. To use one: --style NAME"))
-        return v.name
+        return voices[res]
 
-    def hear(self, op, text, voice):
-        """Plays `text` with `voice`. Returns an error message for the menu to show, or None."""
+    def hear(self, op, text, voice, style=None):
+        """Plays `text` with `voice` (and `style`, if given). Returns an error message for the menu
+        to show, or None."""
         try:
-            data = op.preview(text, voice)
+            data = op.preview(text, voice, style)
         except (ProviderUnavailable, ConfigError) as e:
             return str(e)
         self._tmp = self._tmp or tempfile.mkdtemp(prefix="ankitool_")
@@ -142,7 +167,8 @@ class AudioApp:
         if d.rate or d.style:
             print("Delivery: " + ", ".join(f"{k} {v}" for k, v in (("rate", d.rate), ("style", d.style)) if v))
         for lang, n in sorted(est.by_lang.items()):
-            print(f"  {lang}: {n} distinct texts")
+            style = self.styles.get(lang)
+            print(f"  {lang}: {n} distinct texts" + (f" (style: {style})" if style else ""))
         new = est.texts - est.cached
         print(f"Audio files: {est.texts} distinct, {est.cached} already generated, {new} to request "
               f"(~{est.chars} characters in total)")
@@ -188,7 +214,8 @@ class AudioApp:
                 picked = self.ask_languages(op, detected)
             chosen = op.plan(detected, picked)
             self.rep.log("chosen languages:", ", ".join(sorted(picked)), f"-> {len(chosen)} fields")
-            op.cfg.voices = self.choose_voices(op, speech, chosen)          
+            op.cfg.voices = self.choose_voices(op, speech, chosen)
+            op.cfg.styles = dict(self.styles)
             est = op.prepare(chosen)
             self.print_estimate(est, speech)
             if dry:

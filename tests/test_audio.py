@@ -318,6 +318,41 @@ def test_delivery_changes_the_media_name_and_reaches_the_service(tmp_path):
     op.synthesize()
     assert speech.seen.rate == "-15%"
 
+class StyleSpeech(FakeSpeech):
+    def variant(self, delivery):
+        return f"style={delivery.style}" if delivery.style else ""
+
+    def synthesize(self, text, voice, delivery=None):
+        self.seen = delivery
+        return super().synthesize(text, voice, delivery)
+
+
+def test_style_chosen_for_a_language_changes_name_and_reaches_the_service(tmp_path):
+    speech = StyleSpeech()
+    op = _op(tmp_path, [FakeNote(1, Word="il gatto")], speech=speech, style="chat", styles={"IT": "cheerful"})
+    op.prepare(CHOSEN)
+    assert op.items[0].name == AudioCache.filename("fake", "it-voice", "il gatto", "mp3", "style=cheerful")
+    op.synthesize()
+    assert speech.seen.style == "cheerful"
+
+
+def test_picker_style_can_mean_no_style_and_other_languages_keep_the_default(tmp_path):
+    op = _op(tmp_path, [FakeNote(1, Word="il gatto")], speech=StyleSpeech(), style="chat", styles={"IT": ""})
+    op.prepare(CHOSEN)
+    assert op.items[0].name == AudioCache.filename("fake", "it-voice", "il gatto", "mp3")
+    assert op._delivery("PT").style == "chat"
+
+
+def test_preview_with_a_style_is_cached_separately(tmp_path):
+    sp = StyleSpeech()
+    op = _op(tmp_path, [], speech=sp)
+    v = Voice("it-voice", "it")
+    op.preview("ciao", v)
+    op.preview("ciao", v, "cheerful")
+    op.preview("ciao", v, "cheerful")
+    assert len(sp.asked) == 2
+
+
 def test_cloze_can_be_included(tmp_path):
     n = FakeNote(2, Word="{{c1::cane::animal}} corre")
     op = _op(tmp_path, [n], cloze={2}, include_cloze=True)

@@ -34,6 +34,7 @@ class AudioConfig:
     legacy: bool = True
     rate: str = ""                                       # speaking speed (--rate), e.g. -15%
     style: str = ""                                      # speaking style (--style), e.g. friendly
+    styles: dict = field(default_factory=dict)           # language -> style chosen in the picker ("" = none)
 
 
 @dataclass
@@ -132,19 +133,25 @@ class AudioOperation:
         texts = [t for t in texts if TextTools.has_letters(t) and len(t) <= 120]
         return texts[len(texts) // 2] if texts else ""
 
-    def _delivery(self):
-        return Delivery(self.cfg.rate, self.cfg.style)
+    def _delivery(self, lang=None, style=None):
+        """Delivery for a language: the style chosen in the picker for it, else the configured one.
+        `style` forces one (used to preview styles); "" means no style."""
+        if style is None:
+            style = self.cfg.styles.get(lang, self.cfg.style)
+        return Delivery(self.cfg.rate, style)
 
-    def _variant(self):
-        """Cache-key part for the configured delivery; '' for the default. Raises ConfigError on a bad rate."""
-        return self.speech.variant(self._delivery())
+    def _variant(self, lang=None, style=None):
+        """Cache-key part for the delivery; '' for the default. Raises ConfigError on a bad rate."""
+        return self.speech.variant(self._delivery(lang, style))
 
-    def preview(self, text, voice):
-        """Audio bytes of `voice` reading `text`. Stored in the audio cache under the normal name,
-        so it is reused if the same text is generated later with the same voice."""
-        name = self.audio.filename(self.speech.name, voice.name, text, self.speech.extension, self._variant())
+    def preview(self, text, voice, style=None):
+        """Audio bytes of `voice` reading `text` (with `style`, if given). Stored in the audio cache
+        under the normal name, so it is reused if the same text is generated later the same way."""
+        delivery = self._delivery(style=style)
+        name = self.audio.filename(self.speech.name, voice.name, text, self.speech.extension,
+                                   self.speech.variant(delivery))
         if not self.audio.has(name):
-            data = self.speech.synthesize(text, voice, self._delivery())
+            data = self.speech.synthesize(text, voice, delivery)
             if data is None:
                 raise ProviderUnavailable(f"{self.speech.label} is unavailable; try again.")
             self.audio.write(name, data)
@@ -160,7 +167,8 @@ class AudioOperation:
                               f"({', '.join(langs)}). Choose a single language.")
         voices = {l: self.speech.resolve_voice(l, cfg.voice or cfg.voices.get(l)) for l in langs}
         ext = self.speech.extension
-        variant = self._variant()                        # also rejects a bad rate before anything is spent
+        self._variant()                                  # rejects a bad rate before anything is spent
+        variants = {l: self._variant(l) for l in langs}
         self.items, with_audio, cloze, too_long = [], 0, 0, 0
         for n in self.anki.notes:
             pairs = list(n.items())
@@ -182,7 +190,7 @@ class AudioOperation:
                     continue
                 voice = voices[lang]
                 self.items.append(AudioItem(n, f, v, lang, voice, self.audio.filename(
-                    self.speech.name, voice.name, text, ext, variant), text))
+                    self.speech.name, voice.name, text, ext, variants[lang]), text))
         unique = {it.name: it for it in self.items}
         by_lang = collections.Counter(it.lang for it in unique.values())
         self._est = AudioEstimate(
@@ -202,7 +210,7 @@ class AudioOperation:
             return 0
 
         def work(it):
-            return self.speech.synthesize(it.text, it.voice, self._delivery())
+            return self.speech.synthesize(it.text, it.voice, self._delivery(it.lang))
             
         def on_result(it, data):
             nonlocal done

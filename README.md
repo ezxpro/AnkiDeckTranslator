@@ -1,5 +1,6 @@
 # Anki Deck Translator (`ankitool`)
-<img width="512" height="512" alt="ankitool" src="https://github.com/user-attachments/assets/85a67c78-e609-4b12-b8ea-dbd84e098608" />
+<img width="512" height="512" alt="anki github" src="https://github.com/user-attachments/assets/ef93691b-ab5f-4708-b57b-326371f5c489" />
+
 
 
 

@@ -17,6 +17,19 @@ from ankitool.core.text import lang_base
 from ankitool.ops.audio import AudioConfig, AudioOperation
 from ankitool.tts.base import Delivery, make_speech
 
+
+def _child_env():
+    """Environment for external programs. The standalone binary points LD_LIBRARY_PATH
+    at its own bundled libraries; players must not load those, so restore the user's original value"""
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig is None:
+            env.pop("LD_LIBRARY_PATH", None)
+        else:
+            env["LD_LIBRARY_PATH"] = orig
+    return env
+
 def play(path):
     """Plays the file right here with a command-line player if one is installed (ffplay, mpg123,
     afplay); otherwise opens the system's default player. False if nothing could be started."""
@@ -24,7 +37,7 @@ def play(path):
         if shutil.which(cmd[0]):
             try:
                 subprocess.run([*cmd, str(path)], check=False, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_child_env())
                 return True
             except OSError:
                 pass
@@ -32,9 +45,9 @@ def play(path):
         if sys.platform.startswith("win"):
             os.startfile(path)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_child_env())
         else:
-            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_child_env())
         return True
     except OSError:
         return False

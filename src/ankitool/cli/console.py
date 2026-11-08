@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import os
 import re
@@ -298,7 +297,8 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
     phrase="" turns on an editable typing line (Left/Right/Home/End/Backspace/Delete). Tab calls
     on_tab(index of the highlighted item, phrase or phrase_default) to hear it; the menu stays on
     screen while it plays. on_tab may return an error message to show under the menu."""
-    os.system("")                                       # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+        os.system("")
     multi, n, msg, drawn, top = checked is not None, len(labels), "", 0, 0
     cost = [1 + bool(descs and descs[i]) for i in range(n)]
     cur, status, pending = len(phrase or ""), "", None
@@ -466,7 +466,8 @@ def pager(text):
     if not _interactive():
         print(text)
         return
-    os.system("")                                       # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+        os.system("")
 
     def wrapped(width):
         rows = []
@@ -506,7 +507,8 @@ def pick_language(title, langs, default=None):
     filter, then cancels. Returns the code (or the typed text); None without an interactive terminal."""
     if not _interactive():
         return None
-    os.system("")                                       # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+        os.system("")
     items = sorted(langs, key=lambda l: l.name)
     query, drawn = "", 0
     pos = next((i for i, l in enumerate(items) if l.code == default), 0)
@@ -589,7 +591,8 @@ def pick_file(start=None, suffix=".apkg"):
     Returns the chosen Path, or None if cancelled."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return _pick_file_numbered(start, suffix)       # no keyboard control: numbered list
-    os.system("")                                       # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+        os.system("")
     cur = Path(start or Path.cwd()).resolve()
     pos, focus = 0, None
     while True:

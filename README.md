@@ -1,9 +1,4 @@
 # Anki Deck Translator (`ankitool`)
-<img width="320" height="320" alt="output" src="https://github.com/user-attachments/assets/27af6689-fca8-45aa-a755-fdff594dfd12" />
-
-
-
-
 
 A command-line tool that **translates, reverses, and inspects Anki decks** (`.apkg` files)
 using any of several machine-translation services. It keeps your card structure intact and
@@ -93,7 +88,7 @@ Settings split into two places: **secrets** and **non-secret preferences**.
 
 ### API keys — `.env`
 
-Copy `.env.example` to `.env` next to the script and fill in only the services you use
+Copy `.env.example` to `.env` and fill in only the services you use (with a checkout or pip install, in the folder you run `ankitool` from)
 (`.env` is git-ignored). Keys can also be ordinary environment variables, which take priority.
 
 | Variable       | Used by           | Description |
@@ -314,9 +309,13 @@ shows that text.
 - **Speed and style.** `--rate` changes the speed on any voice: a percentage (`--rate=-15%` slower,
   `--rate=+10%` faster; use the `=` when it starts with `-`), a number (`0.9`) or `slow` / `medium` /
   `fast`. `--style NAME` (e.g. `cheerful`, `friendly`, `chat`) only works on voices that have styles;
-  the voice list marks them `[styles: N]` and shows the names once you pick one. `[HD]` marks Azure's
-  high-definition voices. Defaults: `AZURE_SPEECH_RATE` / `AZURE_SPEECH_STYLE` (the flags win). The
+  the voice list marks them `[styles: N]`: press `Ctrl+S` on one to open its styles (`Tab` plays each,
+  `Enter` picks the style and the voice). `[HD]` marks Azure's high-definition voices. Defaults: `AZURE_SPEECH_RATE` / `AZURE_SPEECH_STYLE` (the flags win). The
   Tab preview in the voice list uses them. A different rate or style generates new files.
+- **Redoing audio.** Notes that already have audio are skipped. In the menu you are asked whether to
+  replace it; on the command line add `--replace`. The old `[sound:]` tags are removed from the chosen
+  fields and new audio is generated; the old files stay in the deck's media until you run Tools >
+  Check Media in Anki.
 
 **Azure Speech setup.** Create a **Speech** resource (or a multi-service one) in the Azure portal and
 put its key and region in `.env`. A Translator-only key does not work.

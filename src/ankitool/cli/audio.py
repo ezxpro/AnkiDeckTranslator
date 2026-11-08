@@ -135,7 +135,7 @@ class AudioApp:
 
         def on_key(key, pos, phrase):
             v = voices[pos]
-            if key.lower() != "\x13" or not v.styles or not can_style:
+            if key.lower() != "s" or phrase or not v.styles or not can_style:
                 return None
 
             def choose_style():
@@ -148,7 +148,7 @@ class AudioApp:
             return choose_style
 
         def foot(pos, phrase):
-            return paint("Ctrl+S", "1;33") + " style" if (can_style and voices[pos].styles) else ""
+            return paint("S", "1;33") + " style" if (can_style and voices[pos].styles and not phrase) else ""
 
         if not _interactive():                      # no keyboard menu available: numbered list, no preview
             res = Ui.select(f"Voice for {lang}", labels, multi=False, default="first")
@@ -156,7 +156,7 @@ class AudioApp:
         else:
             res = menu(f"Voice for {lang}", labels, phrase="", phrase_default=deck_sample or "",
                        intro="Enter = use the highlighted voice. Speed (--rate) works on every voice; "
-                             "on [styles] voices press Ctrl+S to pick a speaking style.",
+                             "on [styles] voices press S to pick a speaking style.",
                        on_tab=lambda i, text: self.hear(op, text, voices[i]),
                        on_key=on_key, foot=foot)
         if res is None:
@@ -183,7 +183,7 @@ class AudioApp:
     def print_estimate(self, est, speech):
         print("\n=== Audio to generate ===")
         print(f"Notes in the deck: {est.notes}")
-        print(f"  skipped, already have audio: {est.with_audio}")
+        print(f"  skipped, already have audio (--replace to redo them): {est.with_audio}")
         if est.cloze:
             print(f"  skipped, cloze (the audio would give the answer away; --include-cloze): {est.cloze}")
         if est.too_long:
@@ -227,7 +227,8 @@ class AudioApp:
                           skip_fields=opts.skip_fields or [], sample=opts.sample,
                           min_ratio=opts.min_ratio, include_cloze=opts.include_cloze,
                           max_chars=opts.max_chars, keep_scheduling=opts.keep_scheduling,
-                          legacy=opts.legacy,rate=self.delivery.rate, style=self.delivery.style)
+                          legacy=opts.legacy, replace=opts.replace, rate=self.delivery.rate,
+                          style=self.delivery.style)
         op = AudioOperation(speech, AudioCache(self.cache_dir / "audio"), cfg, self.rep, client, cache)
         try:
             op.open(src)
@@ -243,13 +244,23 @@ class AudioApp:
             op.cfg.voices = self.choose_voices(op, speech, chosen)
             op.cfg.styles = dict(self.styles)
             est = op.prepare(chosen)
+            if est.with_audio and not op.cfg.replace and not dry and not Ui.auto:
+                if Ui.yes(f"\n{est.with_audio} notes already have audio and were skipped. "
+                          f"Replace their audio?", "n", labels=("Replace it", "Keep it (skip them)")):
+                    op.cfg.replace = True
+                    est = op.prepare(chosen)                 # recount, now including those notes
             self.print_estimate(est, speech)
             if dry:
                 print("Nothing was generated or exported (--dry-run).")
                 return
             if not est.items:
                 raise AnkiToolError("Nothing to do: no field needs audio. No file created.")
-            if not Ui.yes(f"\nGenerate the audio and add it to {est.items} fields?", "y"):
+            question, default = f"\nGenerate the audio and add it to {est.items} fields?", "y"
+            if est.replaced:
+                question = paint(f"\nWARNING: {est.replaced} notes already have audio, and it will be "
+                                 f"REPLACED in the new file (the original deck is not changed). Continue?", "1;31")
+                default = "n"
+            if not Ui.yes(question, default):
                 raise Cancelled("Cancelled.")
             op.synthesize()
             op.apply()

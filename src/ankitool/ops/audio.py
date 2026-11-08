@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 import collections
 import re
 
+_SOUND = re.compile(r"\s*\[sound:[^\]]*\]")
+
 from ankitool.anki.collection import AnkiCollection
 from ankitool.core.constants import AUDIO_MAX_CHARS as MAX_CHARS, MIN_RATIO, SAMPLE
 from ankitool.core.errors import ConfigError, ProviderUnavailable
@@ -35,6 +37,7 @@ class AudioConfig:
     rate: str = ""                                       # speaking speed (--rate), e.g. -15%
     style: str = ""                                      # speaking style (--style), e.g. friendly
     styles: dict = field(default_factory=dict)           # language -> style chosen in the picker ("" = none)
+    replace: bool = False                                # redo audio in notes that already have it
 
 
 @dataclass
@@ -59,6 +62,7 @@ class AudioEstimate:
     chars: int
     cached: int                                          # of those, already generated
     by_lang: dict = field(default_factory=dict)          # language -> distinct texts
+    replaced: int = 0                                    # notes whose existing audio will be replaced
 
 
 class AudioOperation:
@@ -169,12 +173,14 @@ class AudioOperation:
         ext = self.speech.extension
         self._variant()                                  # rejects a bad rate before anything is spent
         variants = {l: self._variant(l) for l in langs}
-        self.items, with_audio, cloze, too_long = [], 0, 0, 0
+        self.items, with_audio, cloze, too_long, replaced = [], 0, 0, 0, 0
         for n in self.anki.notes:
             pairs = list(n.items())
-            if any("[sound:" in v for _, v in pairs):
+            had_sound = any("[sound:" in v for _, v in pairs)
+            if had_sound and not cfg.replace:
                 with_audio += 1
                 continue
+            before = len(self.items)
             if n.mid in self.anki.cloze_mids and not cfg.include_cloze:
                 cloze += 1
                 continue
@@ -182,6 +188,8 @@ class AudioOperation:
                 lang = chosen.get((n.mid, f))
                 if not lang:
                     continue
+                if cfg.replace:
+                    v = _SOUND.sub("", v)                # drop the old audio; the new one takes its place
                 text = TextTools.speakable(v)
                 if not TextTools.has_letters(text):
                     continue
@@ -191,12 +199,14 @@ class AudioOperation:
                 voice = voices[lang]
                 self.items.append(AudioItem(n, f, v, lang, voice, self.audio.filename(
                     self.speech.name, voice.name, text, ext, variants[lang]), text))
+            if had_sound and len(self.items) > before:
+                replaced += 1
         unique = {it.name: it for it in self.items}
         by_lang = collections.Counter(it.lang for it in unique.values())
         self._est = AudioEstimate(
             notes=len(self.anki.notes), with_audio=with_audio, cloze=cloze, too_long=too_long,
             items=len(self.items), texts=len(unique), chars=sum(len(it.text) for it in unique.values()),
-            cached=sum(1 for name in unique if self.audio.has(name)), by_lang=dict(by_lang))
+            cached=sum(1 for name in unique if self.audio.has(name)), by_lang=dict(by_lang), replaced=replaced)
         return self._est
 
     # ---- generating ----

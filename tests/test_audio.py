@@ -353,6 +353,19 @@ def test_preview_with_a_style_is_cached_separately(tmp_path):
     assert len(sp.asked) == 2
 
 
+def test_replace_redoes_notes_that_already_have_audio(tmp_path):
+    op = _op(tmp_path, [FakeNote(1, Word="il gatto [sound:old.mp3]")], replace=True)
+    est = op.prepare(CHOSEN)
+    assert (est.items, est.replaced, est.with_audio) == (1, 1, 0)
+    assert op.items[0].value == "il gatto"            # the old tag is gone before the new one is added
+
+
+def test_notes_with_audio_are_skipped_unless_replace(tmp_path):
+    op = _op(tmp_path, [FakeNote(1, Word="il gatto [sound:old.mp3]")])
+    est = op.prepare(CHOSEN)
+    assert (est.items, est.replaced, est.with_audio) == (0, 0, 1)
+
+
 def test_cloze_can_be_included(tmp_path):
     n = FakeNote(2, Word="{{c1::cane::animal}} corre")
     op = _op(tmp_path, [n], cloze={2}, include_cloze=True)

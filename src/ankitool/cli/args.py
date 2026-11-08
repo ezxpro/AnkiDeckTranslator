@@ -235,6 +235,8 @@ def parse_args(argv=None):
                         "With --lang, the language is not detected")
     a.add_argument("--skip-field", action="append", dest="skip_fields", metavar="FIELD",
                    help="do NOT add audio to this field (or NOTETYPE:FIELD); can be repeated")
+    a.add_argument("--replace", action="store_true",
+                   help="redo the audio of notes that already have it (the old [sound:] tags are removed)")
     a.add_argument("--include-cloze", action="store_true",
                    help="also add audio to cloze notes (it will read the hidden answer)")
     a.add_argument("--max-chars", type=positive_int, default=MAX_CHARS, metavar="N",

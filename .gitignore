@@ -7,6 +7,7 @@ deck_cache*.json
 *.bak
 *.save
 audio/
+audio
 
 # Anki packages
 *.apkg

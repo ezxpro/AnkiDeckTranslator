@@ -9,7 +9,7 @@ from pathlib import Path
 from ankitool.cache.audio import AudioCache
 from ankitool.cache.translation import TranslationCache
 from ankitool.cli.console import (ConsoleReporter, Ui, _interactive, ask_input, ask_paths,
-                                  choose_provider, dim, menu)
+                                  choose_provider, dim, menu, paint)
 from ankitool.cli.translate import show_detected
 from ankitool.core.errors import AnkiToolError, Cancelled, ConfigError, ProviderUnavailable
 from ankitool.core.paths import SCRIPT_DIR
@@ -17,10 +17,9 @@ from ankitool.core.text import lang_base
 from ankitool.ops.audio import AudioConfig, AudioOperation
 from ankitool.tts.base import Delivery, make_speech
 
-
 def _child_env():
-    """Environment for external programs. The standalone binary points LD_LIBRARY_PATH
-    at its own bundled libraries; players must not load those, so restore the user's original value"""
+    """Environment for external programs. The standalone binary points LD_LIBRARY_PATH at its own
+    bundled libraries; players and sh must not load those, so restore the user's original value."""
     env = dict(os.environ)
     if getattr(sys, "frozen", False):
         orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
@@ -29,6 +28,7 @@ def _child_env():
         else:
             env["LD_LIBRARY_PATH"] = orig
     return env
+
 
 def play(path):
     """Plays the file right here with a command-line player if one is installed (ffplay, mpg123,
@@ -45,9 +45,11 @@ def play(path):
         if sys.platform.startswith("win"):
             os.startfile(path)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_child_env())
+            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             env=_child_env())
         else:
-            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_child_env())
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             env=_child_env())
         return True
     except OSError:
         return False
@@ -90,7 +92,7 @@ class AudioApp:
         """Per language: pick a voice from a list where each one can be heard (Tab). Enter on the first
         item keeps the default voice. No questions with -y, --voice or --dry-run (default voice used).
         Returns {language: voice name} only for the languages where another voice was chosen;
-        the style chosen for each voice that has them goes to self.styles."""
+        a style picked with S in the list goes to self.styles."""
         if Ui.auto or self.opts.voice or self.opts.dry_run:
             return {}
         picks = {}
@@ -104,52 +106,63 @@ class AudioApp:
             if all(v.name == default.name for v in voices):
                 print(dim(f"\n{speech.label} has only one voice for {lang} ({default.name}). Using it."))
                 continue
-            sample = op.sample_text(chosen, lang)
-            voice = self.pick_voice(op, voices, default, lang, sample)
+            voice = self.pick_voice(op, voices, default, lang, op.sample_text(chosen, lang))
             if voice.name != default.name:
                 picks[lang] = voice.name
-            style = self.pick_style(op, voice, lang, sample)
-            if style is not None:
-                self.styles[lang] = style
         return picks
 
     def pick_style(self, op, voice, lang, deck_sample):
-        """Second menu for voices that have speaking styles; each can be heard (Tab). Skipped when
-        --style was given (the flag wins). The default style (AZURE_SPEECH_STYLE) starts highlighted.
-        Returns the style name, "" for no style, or None when there is nothing to choose."""
-        if not voice.styles or self.opts.style is not None:
-            return None
+        """Menu of a voice's speaking styles; each can be heard (Tab). The default style
+        (AZURE_SPEECH_STYLE) starts highlighted. Returns the style name, "" for no style, or None
+        if cancelled (Esc)."""
         labels = ["(no style)"] + list(voice.styles)
         by_name = {s.lower(): i for i, s in enumerate(labels)}
         pos = by_name.get(self.delivery.style.lower(), 0) if self.delivery.style else 0
         title = f"Style for {voice.name} ({lang})"
-        if not _interactive():
-            res = Ui.select(title, labels, multi=False, default="first")
-            res = None if res is None else res[0]
-        else:
-            res = menu(title, labels, pos=pos, phrase="", phrase_default=deck_sample or "",
-                       intro="Enter = use the highlighted style. Tab plays it. Same as --style NAME.",
-                       on_tab=lambda i, text: self.hear(op, text, voice, "" if i == 0 else labels[i]))
-        if res is None:
-            raise Cancelled("Cancelled.")
-        return "" if res == 0 else labels[res]
+        res = menu(title, labels, pos=pos, phrase="", phrase_default=deck_sample or "",
+                   intro="Enter = use this style (and this voice). Tab plays it. Same as --style NAME.",
+                   on_tab=lambda i, text: self.hear(op, text, voice, "" if i == 0 else labels[i]))
+        return None if res is None else "" if res == 0 else labels[res]
 
     def pick_voice(self, op, voices, default, lang, deck_sample):
         voices = [default] * (default.name not in {v.name for v in voices}) + list(voices)
         voices = sorted(voices, key=lambda v: v.name != default.name)      # default first, rest keep order
-        labels = [f"{v.name}  {v.gender}" + ("  (default)" if v.name == default.name else "")
-                  + ("  [HD]" if v.hd else "") + (f"  [styles: {len(v.styles)}]" if v.styles else "")
-                  for v in voices]
+        base = [f"{v.name}  {v.gender}" + ("  (default)" if v.name == default.name else "")
+                + ("  [HD]" if v.hd else "") + (f"  [styles: {len(v.styles)}]" if v.styles else "")
+                for v in voices]
+        labels, picked = list(base), {}               # picked: voice name -> style chosen with S
+        can_style = self.opts.style is None           # --style given: the flag wins
+
+        def on_key(key, pos, phrase):
+            v = voices[pos]
+            if key.lower() != "\x13" or not v.styles or not can_style:
+                return None
+
+            def choose_style():
+                style = self.pick_style(op, v, lang, deck_sample)
+                if style is None:                     # Esc: back to the voice list
+                    return None
+                picked[v.name] = style
+                labels[pos] = base[pos] + f"  <style: {picked[v.name] or 'none'}>"
+                return pos
+            return choose_style
+
+        def foot(pos, phrase):
+            return paint("Ctrl+S", "1;33") + " style" if (can_style and voices[pos].styles) else ""
+
         if not _interactive():                      # no keyboard menu available: numbered list, no preview
             res = Ui.select(f"Voice for {lang}", labels, multi=False, default="first")
             res = None if res is None else res[0]
         else:
             res = menu(f"Voice for {lang}", labels, phrase="", phrase_default=deck_sample or "",
                        intro="Enter = use the highlighted voice. Speed (--rate) works on every voice; "
-                             "[styles] voices let you pick a speaking style next.",
-                       on_tab=lambda i, text: self.hear(op, text, voices[i]))
+                             "on [styles] voices press Ctrl+S to pick a speaking style.",
+                       on_tab=lambda i, text: self.hear(op, text, voices[i]),
+                       on_key=on_key, foot=foot)
         if res is None:
             raise Cancelled("Cancelled.")
+        if voices[res].name in picked:
+            self.styles[lang] = picked[voices[res].name]
         return voices[res]
 
     def hear(self, op, text, voice, style=None):
@@ -187,7 +200,7 @@ class AudioApp:
               f"(~{est.chars} characters in total)")
         if new and speech.rpm:
             print(f"At {speech.rpm} requests/min and {speech.max_workers} worker(s): "
-                  f"about {new / speech.rpm:.0f} min.")
+                  f"about {new / speech.rpm / max(speech.max_workers, 1):.0f} min.")
 
     def run(self):
         opts, dry = self.opts, self.opts.dry_run

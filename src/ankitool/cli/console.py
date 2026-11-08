@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import os
 import re
@@ -8,7 +9,7 @@ import time
 
 from ankitool.core.constants import DEFAULT_PROVIDER
 from ankitool.core.settings import configured_provider
-from ankitool.core.errors import Cancelled, ConfigError
+from ankitool.core.errors import Cancelled, ConfigError, Quit
 from ankitool.core.paths import SCRIPT_DIR
 from ankitool.core.progress import Reporter
 from ankitool.providers.base import PROVIDERS, make_provider
@@ -234,6 +235,7 @@ class Ui:
                     bad.append(tok)
             if picked and not bad and (multi or len(picked) == 1):
                 return sorted(picked)
+                return sorted(picked)
             if picked and not bad:
                 print("  Only one item can be chosen here. Type a single number.")
             else:
@@ -289,15 +291,18 @@ def _window(cost, top, pos, avail):
 
 
 def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=None,
-         tones=None, cancel=True, phrase=None, phrase_default="", on_tab=None):
+         tones=None, cancel=True, phrase=None, phrase_default="", on_tab=None, on_key=None, foot=None):
     """Keyboard menu drawn in place. checked=None: choose one (Enter); checked=a set: tick several
     (Space) and confirm with Enter. Returns the index, the sorted ticked indices, or None if
     cancelled (Esc). tones: colour code per item. hotkeys: {key: index}, choose at once (single only).
     Lists taller than the terminal scroll: only the items around the cursor are drawn.
     phrase="" turns on an editable typing line (Left/Right/Home/End/Backspace/Delete). Tab calls
     on_tab(index of the highlighted item, phrase or phrase_default) to hear it; the menu stays on
-    screen while it plays. on_tab may return an error message to show under the menu."""
-    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+    screen while it plays. on_tab may return an error message to show under the menu.
+    Esc cancels (None); q (or Ctrl+Q, also while typing) quits the program (Quit).
+    on_key(key, index, phrase) may return a function to run for that key (a sub-menu): it returns
+    an index to choose it, or None to come back to this menu. foot(index, phrase) adds a hint."""
+    if os.name == "nt":                                       # enables ANSI codes on old Windows consoles
         os.system("")
     multi, n, msg, drawn, top = checked is not None, len(labels), "", 0, 0
     cost = [1 + bool(descs and descs[i]) for i in range(n)]
@@ -323,11 +328,15 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
             if phrase is not None:
                 parts += [k("Type", "a phrase"), k("Left/Right", "edit"), k("Tab", "hear it", "1;32")]
             parts.append(k("Enter", "select", "1;32"))
+        extra = foot(pos, phrase) if foot else ""
+        if extra:
+            parts.append(extra)
         if cancel:
             parts.append(k("Esc", "cancel", "1;31"))
-        foot = "   ".join(parts)
+            parts.append(k("q" if phrase is None else "Ctrl+Q", "quit", "1;31"))
+        foot_text = "   ".join(parts)
         # rows left for items: the terminal minus title, footer, two "more" markers, status/message, the cursor line
-        avail = max(3, shutil.get_terminal_size().lines - _rows("\n".join(top_lines + [foot])) - 4)
+        avail = max(3, shutil.get_terminal_size().lines - _rows("\n".join(top_lines + [foot_text])) - 4)
         top, end = _window(cost, top, pos, avail)
         lines = list(top_lines)
         if top > 0:
@@ -344,7 +353,7 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
                 lines.append(dim(f"       {descs[i]}"))
         if end < n:
             lines.append(dim(f"       ... {n - end} more below"))
-        lines.append(foot)
+        lines.append(foot_text)
         if status:
             lines.append(paint(status, "1;33"))
         if msg:
@@ -359,6 +368,15 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
             msg = on_tab(i, say) or ""
             continue
         key, msg, result, done = read_key(), "", None, False
+        act = on_key(key, pos, phrase) if on_key else None
+        if act:                                         # a sub-menu: clear this one, run it, redraw
+            print(f"\033[{drawn}A\033[J", end="", flush=True)
+            drawn = 0
+            chosen = act()
+            if chosen is not None:
+                print(head(title.split("\n")[0]) + dim("  ->  ") + labels[chosen], flush=True)
+                return chosen
+            continue
         if phrase is not None and key == "\t":
             say = phrase.strip() or phrase_default.strip()
             if not say:
@@ -392,6 +410,10 @@ def menu(title, labels, pos=0, checked=None, intro=None, descs=None, hotkeys=Non
             pos = 0
         elif key == "end":
             pos = n - 1
+        elif key == "\x11" or (key in ("q", "Q") and phrase is None and cancel
+                              and not (hotkeys and key.lower() in hotkeys)):
+            print(f"\033[{drawn}A\033[J", end="", flush=True)
+            raise Quit()
         elif not multi and hotkeys and key.lower() in hotkeys:
             pos, result, done = hotkeys[key.lower()], hotkeys[key.lower()], True
         elif multi and key == " ":
@@ -466,7 +488,7 @@ def pager(text):
     if not _interactive():
         print(text)
         return
-    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                       # enables ANSI codes on old Windows consoles
         os.system("")
 
     def wrapped(width):
@@ -504,10 +526,10 @@ def pager(text):
 def pick_language(title, langs, default=None):
     """Keyboard language picker. Up/Down/PgUp/PgDn/Home/End move; typing filters by code or name
     (any case); Enter chooses (with no match, the typed text is returned as is); Esc clears the
-    filter, then cancels. Returns the code (or the typed text); None without an interactive terminal."""
+    filter, then cancels; Ctrl+Q quits. Returns the code (or the typed text); None without an interactive terminal."""
     if not _interactive():
         return None
-    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                       # enables ANSI codes on old Windows consoles
         os.system("")
     items = sorted(langs, key=lambda l: l.name)
     query, drawn = "", 0
@@ -520,7 +542,7 @@ def pick_language(title, langs, default=None):
         rows = max(5, min(12, shutil.get_terminal_size().lines - 7))
         top = max(0, min(pos - rows // 2, n - rows))
         lines = [head(title),
-                 dim("Type to filter (code or name)   Up/Down PgUp/PgDn move   Enter choose   Esc cancel"),
+                 dim("Type to filter (code or name)   Up/Down PgUp/PgDn move   Enter choose   Esc cancel   Ctrl+Q quit"),
                  f"{num('Search:')} {paint(query, '1;36')}{dim('_')}"]
         for i in range(top, min(top + rows, n)):
             l = shown[i]
@@ -561,6 +583,9 @@ def pick_language(title, langs, default=None):
             else:
                 print(f"\033[{drawn}A\033[J", end="", flush=True)
                 raise Cancelled("Cancelled.")
+        elif key == "\x11":
+            print(f"\033[{drawn}A\033[J", end="", flush=True)
+            raise Quit()
         elif key == "backspace":
             query, pos = query[:-1], 0
         elif len(key) == 1 and key.isprintable():
@@ -591,7 +616,7 @@ def pick_file(start=None, suffix=".apkg"):
     Returns the chosen Path, or None if cancelled."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return _pick_file_numbered(start, suffix)       # no keyboard control: numbered list
-    if os.name == "nt":                                 # enables ANSI codes on old Windows consoles
+    if os.name == "nt":                                       # enables ANSI codes on old Windows consoles
         os.system("")
     cur = Path(start or Path.cwd()).resolve()
     pos, focus = 0, None
@@ -617,7 +642,7 @@ def pick_file(start=None, suffix=".apkg"):
         if len(items) <= 1:
             out.append(dim(f"     (no folders or {suffix} files here)"))
         out += ["", dim(f"{pos + 1}/{len(items)}   Up/Down move   Enter open/choose   "
-                        f"Left/Backspace up   p paste path   Esc cancel")]
+                        f"Left/Backspace up   p paste path   Esc cancel   q quit")]
         print("\n".join(out), end="", flush=True)
 
         key = read_key()
@@ -643,7 +668,10 @@ def pick_file(start=None, suffix=".apkg"):
                 return p
         elif key in ("left", "backspace") and cur.parent != cur:
             focus, cur = cur, cur.parent
-        elif key in ("esc", "q"):
+        elif key in ("q", "\x11"):
+            print()
+            raise Quit()
+        elif key == "esc":
             print()
             return None
         elif key in ("p", "/"):

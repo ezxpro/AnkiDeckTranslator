@@ -9,7 +9,7 @@ from ankitool.cli.console import Ui, choose_provider
 from ankitool.cli.info import InfoApp
 from ankitool.cli.reverse import ReverseApp
 from ankitool.cli.translate import AnkiToolApp
-from ankitool.core.errors import AnkiToolError
+from ankitool.core.errors import AnkiToolError, Cancelled, Quit
 
 
 MENU = {"1": ("translate", "Translate a deck",
@@ -51,7 +51,10 @@ def main(argv=None):
             if getattr(opts, "command", None) is None:
                 from_menu = True
                 options = {k: (v[1], v[2]) for k, v in MENU.items()}
-                key = Ui.choose("What do you want to do?", options, "1")
+                try:
+                    key = Ui.choose("What do you want to do?", options, "1")
+                except (Cancelled, Quit):                # Esc or q at the main menu: leave
+                    break
                 if key == "0":
                     break
                 opts = parse_args(MENU_ARGV.get(MENU[key][0], [MENU[key][0]]))
@@ -85,6 +88,9 @@ def main(argv=None):
                 break
             argv = []  # Resets the arguments so the interactive menu shows up next time
 
+        except Quit:
+            print("\nBye.")
+            break
         except AnkiToolError as e:                       # expected (our) errors
             if not _failed(f"[Warning] {e}", from_menu):
                 break

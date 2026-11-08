@@ -9,3 +9,7 @@ class ProviderUnavailable(AnkiToolError):
 
 class Cancelled(AnkiToolError):
     """The operation was cancelled."""
+
+
+class Quit(Exception):
+    """Q or Ctrl+Q in a menu: leave the program altogether (not an error)."""

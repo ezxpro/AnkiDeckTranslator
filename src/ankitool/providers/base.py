@@ -25,7 +25,8 @@ def load_secret(env_name, label):
     key = env_value(env_name)
     if not key:
         raise ConfigError(f"API key for {label} not found. Set the environment variable "
-                          f"{env_name} or create a .env file next to the script with:\n"
+                          f"{env_name}, or run \"ankitool init\" to create an example .env in\n"
+                          f"{SCRIPT_DIR} and put the key there:\n"
                           f"{env_name}=your-key-here")
     return key
 
@@ -102,7 +103,7 @@ class RetryPacing:
         self._pause(seconds)
         if self.on_wait:
             self.on_wait(seconds, str(error) or type(error).__name__)
-        self._sleep(seconds)
+        time.sleep(seconds)
 
 
 class TranslationProvider(RetryPacing, ABC):

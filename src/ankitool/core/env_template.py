@@ -1,0 +1,39 @@
+"""Text written by `ankitool init`. Keep it identical to .env.example (a test checks)."""
+
+ENV_TEMPLATE = """# Copy this file to ".env" and fill in ONLY the services you use.
+# ".env" is listed in .gitignore and will not be committed.
+# Everything here can also be set as a normal environment variable (which takes priority).
+# Non-secret preferences (default service, model, workers) can live in config.json instead:
+#   ankitool config set provider groq
+
+# --- Default service (optional) ---
+# ANKITOOL_PROVIDER=groq              # used when --provider is not given (no question asked)
+
+
+# ===== Machine translation (MT) =====
+DEEPL_KEY=your-key-here:fx
+
+# AZURE_KEY=your-key-here             # Azure AI Translator, free tier F0 (2M characters/month)
+# AZURE_REGION=brazilsouth            # required for regional resources (the usual kind); shown next to the key in the portal
+# AZURE_TIER=F0                       # F0 (default), S1, S2, S3 or S4: sets how fast requests are sent
+
+
+# ===== LLM translation =====
+# GEMINI_KEY=your-key-here            # free tier, from https://aistudio.google.com/apikey
+# GEMINI_MODEL=gemini-flash-lite-latest
+
+# GROQ_KEY=your-key-here              # free tier, from https://console.groq.com/keys
+# GROQ_MODEL=openai/gpt-oss-20b
+# GROQ_BASE_URL=https://api.groq.com/openai/v1
+
+# OPENAI_KEY=your-key-here            # any OpenAI-compatible service (see OPENAI_BASE_URL)
+# OPENAI_MODEL=gpt-4o-mini
+# OPENAI_BASE_URL=https://api.openai.com/v1   # e.g. another host, or http://localhost:11434/v1 (Ollama)
+
+
+# ===== Audio / TTS (command `audio`) =====
+# AZURE_SPEECH_KEY=your-key-here      # Azure AI Speech (or a multi-service resource); a Translator-only key does not work
+# AZURE_SPEECH_REGION=brazilsouth     # required; shown next to the key in the portal (falls back to AZURE_REGION)
+# AZURE_SPEECH_TIER=F0                # F0 (free, default) or S0 (paid): sets how fast requests are sent
+# AZURE_SPEECH_RATE=-10%              # optional default speaking speed (percentage, number, slow/medium/fast)
+# AZURE_SPEECH_STYLE=chat             # optional default speaking style, only for voices that have it"""

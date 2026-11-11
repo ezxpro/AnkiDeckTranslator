@@ -88,7 +88,7 @@ Settings split into two places: **secrets** and **non-secret preferences**.
 
 ### API keys — `.env`
 
-Copy `.env.example` to `.env` and fill in only the services you use (with a checkout or pip install, in the folder you run `ankitool` from)
+Copy `.env.example` to `.env` and fill in only the services you use (with a checkout or pip install, in the folder you run `ankitool` from). Run `ankitool init` to create an example `.env` there (it never overwrites an existing one unless you add `--force`)
 (`.env` is git-ignored). Keys can also be ordinary environment variables, which take priority.
 
 | Variable       | Used by           | Description |

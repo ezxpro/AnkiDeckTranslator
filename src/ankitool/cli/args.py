@@ -279,6 +279,14 @@ def parse_args(argv=None):
                    epilog="examples:\n"
                           "  ankitool info deck.apkg",
                    formatter_class=WrapHelp)
+    ini = sub.add_parser("init",
+                         help="create an example .env file for your API keys",
+                         description="Writes a commented example .env in the folder where ankitool reads "
+                                     "its settings (next to the .exe on Windows, ~/.config/ankitool on "
+                                     "Linux). Fill in only the services you use. Never overwrites an "
+                                     "existing file unless --force is given.",
+                         formatter_class=WrapHelp)
+    ini.add_argument("--force", action="store_true", help="replace an existing .env")
     lg = sub.add_parser("langs",
                         help="list the translation service's languages (target or source)",
                         description="Lists the languages a translation service accepts, as code and name. "

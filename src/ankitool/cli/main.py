@@ -9,6 +9,7 @@ from ankitool.cli.console import Ui, choose_provider
 from ankitool.cli.info import InfoApp
 from ankitool.cli.reverse import ReverseApp
 from ankitool.cli.translate import AnkiToolApp
+from ankitool.cli.initcmd import run_init
 from ankitool.core.errors import AnkiToolError, Cancelled, Quit
 
 
@@ -73,6 +74,8 @@ def main(argv=None):
                 ConfigApp(opts).run()
             elif opts.command == "cache":
                 CacheApp(opts).run()
+            elif opts.command == "init":
+                run_init(opts)
             elif opts.command == "langs":
                 provider = choose_provider(opts)
                 if getattr(opts, "source", False):

@@ -45,7 +45,7 @@ def colorize(text):
     return "\n".join(out) + "\n"
 
 
-COMMANDS = ("translate", "audio", "reverse", "info", "langs", "bench", "config", "cache")
+COMMANDS = ("translate", "audio", "reverse", "info", "langs", "bench", "config", "cache", "init")
 
 
 class FriendlyParser(argparse.ArgumentParser):

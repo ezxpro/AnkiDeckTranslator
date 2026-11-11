@@ -23,3 +23,7 @@ def test_init_creates_env_and_never_overwrites_without_force(tmp_path, monkeypat
 
     initcmd.run_init(SimpleNamespace(force=True))
     assert env.read_text(encoding="utf-8") == ENV_TEMPLATE
+
+def test_init_is_a_known_command():
+    from ankitool.cli.args import parse_args
+    assert parse_args(["init"]).command == "init"

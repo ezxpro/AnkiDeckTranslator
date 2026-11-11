@@ -29,6 +29,18 @@ def _child_env():
             env["LD_LIBRARY_PATH"] = orig
     return env
 
+def _play_windows(path):
+    """Plays an audio file with Windows' built-in MCI (no external player). Blocks until it ends."""
+    import ctypes
+    mci = ctypes.windll.winmm.mciSendStringW
+    alias = "ankitool_preview"
+    mci(f"close {alias}", None, 0, None)
+    if mci(f'open "{path}" type mpegvideo alias {alias}', None, 0, None) != 0:
+        return False
+    try:
+        return mci(f"play {alias} wait", None, 0, None) == 0
+    finally:
+        mci(f"close {alias}", None, 0, None)
 
 def play(path):
     """Plays the file right here with a command-line player if one is installed (ffplay, mpg123,
@@ -43,7 +55,9 @@ def play(path):
                 pass
     try:
         if sys.platform.startswith("win"):
-            os.startfile(path)
+            if _play_windows(path):
+                return True
+            os.startfile(path)                        # MCI failed: fall back to the default player
         elif sys.platform == "darwin":
             subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              env=_child_env())

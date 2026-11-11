@@ -29,6 +29,7 @@ def _child_env():
             env["LD_LIBRARY_PATH"] = orig
     return env
 
+
 def _play_windows(path):
     """Plays an audio file with Windows' built-in MCI (no external player). Blocks until it ends."""
     import ctypes
@@ -41,6 +42,7 @@ def _play_windows(path):
         return mci(f"play {alias} wait", None, 0, None) == 0
     finally:
         mci(f"close {alias}", None, 0, None)
+
 
 def play(path):
     """Plays the file right here with a command-line player if one is installed (ffplay, mpg123,
@@ -149,7 +151,7 @@ class AudioApp:
 
         def on_key(key, pos, phrase):
             v = voices[pos]
-            if key.lower() != "s" or phrase or not v.styles or not can_style:
+            if key not in ("\x13", "f2") or not v.styles or not can_style:   # Ctrl+S or F2
                 return None
 
             def choose_style():
@@ -162,7 +164,7 @@ class AudioApp:
             return choose_style
 
         def foot(pos, phrase):
-            return paint("S", "1;33") + " style" if (can_style and voices[pos].styles and not phrase) else ""
+            return paint("Ctrl+S/F2", "1;33") + " style" if (can_style and voices[pos].styles) else ""
 
         if not _interactive():                      # no keyboard menu available: numbered list, no preview
             res = Ui.select(f"Voice for {lang}", labels, multi=False, default="first")
@@ -170,7 +172,7 @@ class AudioApp:
         else:
             res = menu(f"Voice for {lang}", labels, phrase="", phrase_default=deck_sample or "",
                        intro="Enter = use the highlighted voice. Speed (--rate) works on every voice; "
-                             "on [styles] voices press S to pick a speaking style.",
+                             "on [styles] voices press Ctrl+S (or F2) to pick a speaking style.",
                        on_tab=lambda i, text: self.hear(op, text, voices[i]),
                        on_key=on_key, foot=foot)
         if res is None:

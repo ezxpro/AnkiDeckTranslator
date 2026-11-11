@@ -446,7 +446,7 @@ def read_key():
         ch = msvcrt.getwch()
         if ch in ("\x00", "\xe0"):                      # arrow/function keys come as two characters
             return {"H": "up", "P": "down", "K": "left", "M": "right", "I": "pgup",
-                    "Q": "pgdn", "G": "home", "O": "end", "S": "delete"}.get(msvcrt.getwch(), "")
+                    "Q": "pgdn", "G": "home", "O": "end", "S": "delete", "<": "f2"}.get(msvcrt.getwch(), "")
         if ch == "\x03":
             raise KeyboardInterrupt
         return {"\r": "enter", "\x1b": "esc", "\x08": "backspace"}.get(ch, ch)
@@ -474,7 +474,7 @@ def read_key():
             return {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "[5~": "pgup","[3~": "delete",
                     "[6~": "pgdn", "[H": "home", "[F": "end", "[1~": "home", "[4~": "end",
                     "OH": "home", "OF": "end", "OA": "up", "OB": "down", "OC": "right",
-                    "OD": "left"}.get(seq, "")            # unknown keys are ignored, not treated as Esc
+                    "OD": "left", "OQ": "f2", "[12~": "f2"}.get(seq, "")            # unknown keys are ignored, not treated as Esc
         if ch == "\x03":
             raise KeyboardInterrupt
         return {"\r": "enter", "\n": "enter", "\x7f": "backspace"}.get(ch, ch)
